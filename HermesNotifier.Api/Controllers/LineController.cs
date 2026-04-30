@@ -1,6 +1,5 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using System.IdentityModel.Tokens.Jwt;
 using System.Text.Json;
 using HermesNotifier.Api.DTOs.Responses.Lines;
 using HermesNotifier.Api.Data;
@@ -9,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HermesNotifier.Api.Controllers
 {
-    [Route("line")]
+    [Route("api/line")]
     [ApiController]
     public class LineController : ControllerBase
     {
@@ -85,17 +84,40 @@ namespace HermesNotifier.Api.Controllers
                 }
             );
 
-            var idToken = tokenResponse?.IdToken;
+            if (tokenResponse?.AccessToken == null)
+            {
+                _logger.LogError("無法從 LINE 取得 Access Token");
+                return BadRequest("無法取得 LINE Access Token");
+            }
 
-            var handler = new JwtSecurityTokenHandler();
-            var jwt = handler.ReadJwtToken(idToken);
+            // 使用 Access Token 呼叫 LINE Profile API 取得真正的 User ID
+            httpClient.DefaultRequestHeaders.Authorization = 
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokenResponse.AccessToken);
 
-            var lineUserId = jwt.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
-            var displayName = jwt.Claims.FirstOrDefault(c => c.Type == "name")?.Value;
+            var profileResponse = await httpClient.GetAsync("https://api.line.me/v2/profile");
+
+            if (!profileResponse.IsSuccessStatusCode)
+            {
+                var errorBody = await profileResponse.Content.ReadAsStringAsync();
+                _logger.LogError("無法取得 LINE Profile: {error}", errorBody);
+                return BadRequest("無法取得 LINE 使用者資訊");
+            }
+
+            var profileBody = await profileResponse.Content.ReadAsStringAsync();
+            var profileData = JsonSerializer.Deserialize<LineProfileResponse>(
+                profileBody,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                }
+            );
+
+            var lineUserId = profileData?.UserId;
+            var displayName = profileData?.DisplayName;
 
             if (string.IsNullOrEmpty(lineUserId))
             {
-                _logger.LogError("無法從 LINE Token 取得使用者 ID");
+                _logger.LogError("無法從 LINE Profile 取得使用者 ID");
                 return BadRequest("無法取得 LINE 使用者資訊");
             }
 

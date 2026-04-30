@@ -12,6 +12,8 @@ public class Product
 
     public required string ImageUrl { get; set; }
 
+    public required string ProductUrl { get; set; }
+
     public string? Color { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

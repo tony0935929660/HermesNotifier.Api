@@ -10,5 +10,7 @@ public class ProductDto
 
     public required string ImageUrl { get; set; }
 
+    public required string ProductUrl { get; set; }
+
     public string? Color { get; set; }
 }

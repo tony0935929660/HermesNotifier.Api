@@ -58,6 +58,10 @@ public class ApplicationDbContext : DbContext
                 .IsRequired()
                 .HasMaxLength(500);
 
+            entity.Property(e => e.ProductUrl)
+                .IsRequired()
+                .HasMaxLength(500);
+
             entity.Property(e => e.Color)
                 .HasMaxLength(50);
 

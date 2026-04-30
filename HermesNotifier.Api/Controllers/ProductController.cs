@@ -50,6 +50,7 @@ public class ProductController : ControllerBase
                     Title = dto.Title,
                     Price = dto.Price,
                     ImageUrl = dto.ImageUrl,
+                    ProductUrl = dto.ProductUrl,
                     Color = dto.Color
                 })
                 .ToList();
@@ -132,7 +133,7 @@ public class ProductController : ControllerBase
                 var batch = productBatches[batchIndex];
                 var bubbles = batch.Select(p =>
                 {
-                    var lineTargetUrl = HermesUrl;
+                    var lineTargetUrl = p.ProductUrl;
                     return new
                     {
                         type = "bubble",
@@ -186,7 +187,7 @@ public class ProductController : ControllerBase
                 var flexMessage = new
                 {
                     type = "flex",
-                    altText = $"Hermes 皮件商品通知 ({batchIndex + 1}/{productBatches.Length}) - 本批 {batch.Length} 個商品",
+                    altText = $"Hermès 新品上架 - 共 {products.Count} 件商品",
                     contents = new
                     {
                         type = "carousel",
