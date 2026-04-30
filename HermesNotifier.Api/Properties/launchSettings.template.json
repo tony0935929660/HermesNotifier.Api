@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "http://json.schemastore.org/launchsettings.json",
   "iisSettings": {
     "windowsAuthentication": false,
@@ -27,7 +27,7 @@
       "applicationUrl": "https://localhost:7064;http://localhost:5268",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "LINE_BOT_CHANNEL_ACCESS_TOKEN": "bRn0CJZWkMBVT8l3bVzRGWj7vK0qaopE0Dr5TEHcpTiFU7pnVomnG68XOoWnx1ly/KjymiaVzI+nr0T9h5A08oQ2xiQyPT0+oF8i874VsQCAb3lDv8aIqq3K+s4EqCF8jzwZr5ac9UZiL6XgmhWERAdB04t89/1O/w1cDnyilFU="
+        "LINE_BOT_CHANNEL_ACCESS_TOKEN": "YOUR_LINE_BOT_CHANNEL_ACCESS_TOKEN_HERE"
       }
     },
     "IIS Express": {
