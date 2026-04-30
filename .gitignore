@@ -402,6 +402,4 @@ FodyWeavers.xsd
 appsettings.json
 appsettings.Development.json
 appsettings.Production.json
-
-# Launch settings with sensitive environment variables
 **/Properties/launchSettings.json
