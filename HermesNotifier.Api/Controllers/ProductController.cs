@@ -106,6 +106,20 @@ public class ProductController : ControllerBase
 
         try
         {
+            // 取得訂閱未過期的使用者
+            var now = DateTime.UtcNow;
+            var activeSubscribers = await _context.Users
+                .Where(u => u.SubscribedUntil.HasValue && u.SubscribedUntil.Value > now)
+                .ToListAsync();
+
+            if (!activeSubscribers.Any())
+            {
+                _logger.LogInformation("沒有訂閱中的使用者，跳過通知發送");
+                return 0;
+            }
+
+            _logger.LogInformation("找到 {count} 個訂閱中的使用者", activeSubscribers.Count);
+
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -169,45 +183,56 @@ public class ProductController : ControllerBase
                     };
                 }).ToList();
 
-                var payload = new
+                var flexMessage = new
                 {
-                    messages = new[]
+                    type = "flex",
+                    altText = $"Hermes 皮件商品通知 ({batchIndex + 1}/{productBatches.Length}) - 本批 {batch.Length} 個商品",
+                    contents = new
                     {
-                        new
-                        {
-                            type = "flex",
-                            altText = $"Hermes 皮件商品通知 ({batchIndex + 1}/{productBatches.Length}) - 本批 {batch.Length} 個商品",
-                            contents = new
-                            {
-                                type = "carousel",
-                                contents = bubbles
-                            }
-                        }
+                        type = "carousel",
+                        contents = bubbles
                     }
                 };
 
-                var response = await client.PostAsJsonAsync("https://api.line.me/v2/bot/message/broadcast", payload);
-                var responseBody = await response.Content.ReadAsStringAsync();
+                // 使用 Multicast API 發送給指定的訂閱使用者
+                var lineUserIds = activeSubscribers.Select(u => u.LineId).ToList();
 
-                if (response.IsSuccessStatusCode)
+                // LINE Multicast API 一次最多發送給 500 個使用者
+                var userBatches = lineUserIds.Chunk(500).ToArray();
+
+                foreach (var userBatch in userBatches)
                 {
-                    sentProductCount += batch.Length;
-                    _logger.LogInformation(
-                        "LINE broadcast 成功 (batch={batchIndex}/{batchCount}, size={batchSize})：{body}",
-                        batchIndex + 1,
-                        productBatches.Length,
-                        batch.Length,
-                        responseBody);
-                }
-                else
-                {
-                    _logger.LogError(
-                        "LINE broadcast 失敗 (batch={batchIndex}/{batchCount}, size={batchSize}, status={status})：{body}",
-                        batchIndex + 1,
-                        productBatches.Length,
-                        batch.Length,
-                        response.StatusCode,
-                        responseBody);
+                    var payload = new
+                    {
+                        to = userBatch.ToArray(),
+                        messages = new[] { flexMessage }
+                    };
+
+                    var response = await client.PostAsJsonAsync("https://api.line.me/v2/bot/message/multicast", payload);
+                    var responseBody = await response.Content.ReadAsStringAsync();
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        sentProductCount += batch.Length;
+                        _logger.LogInformation(
+                            "LINE multicast 成功 (batch={batchIndex}/{batchCount}, products={productCount}, users={userCount})：{body}",
+                            batchIndex + 1,
+                            productBatches.Length,
+                            batch.Length,
+                            userBatch.Count(),
+                            responseBody);
+                    }
+                    else
+                    {
+                        _logger.LogError(
+                            "LINE multicast 失敗 (batch={batchIndex}/{batchCount}, products={productCount}, users={userCount}, status={status})：{body}",
+                            batchIndex + 1,
+                            productBatches.Length,
+                            batch.Length,
+                            userBatch.Count(),
+                            response.StatusCode,
+                            responseBody);
+                    }
                 }
             }
 
@@ -215,7 +240,7 @@ public class ProductController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "LINE broadcast 發送失敗");
+            _logger.LogError(ex, "LINE multicast 發送失敗");
             return 0;
         }
     }
