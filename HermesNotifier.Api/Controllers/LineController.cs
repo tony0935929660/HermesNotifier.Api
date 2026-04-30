@@ -6,7 +6,7 @@ using HermesNotifier.Api.DTOs.Responses.Lines;
 
 namespace HermesNotifier.Api.Controllers
 {
-    [Route("line")]
+    [Route("api/line")]
     [ApiController]
     public class LineController : ControllerBase
     {
