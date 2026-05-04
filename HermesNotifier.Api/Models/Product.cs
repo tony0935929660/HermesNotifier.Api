@@ -16,5 +16,9 @@ public class Product
 
     public string? Color { get; set; }
 
+    public bool IsAvailable { get; set; } = true;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    public DateTime? UpdatedAt { get; set; }
 }

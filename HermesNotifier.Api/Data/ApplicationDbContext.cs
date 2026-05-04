@@ -65,8 +65,15 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.Color)
                 .HasMaxLength(50);
 
+            entity.Property(e => e.IsAvailable)
+                .IsRequired()
+                .HasDefaultValue(true);
+
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("GETUTCDATE()");
+
+            // 建立索引以加速查詢上架中的商品
+            entity.HasIndex(e => e.IsAvailable);
         });
     }
 }

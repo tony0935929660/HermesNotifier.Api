@@ -34,44 +34,75 @@ public class ProductController : ControllerBase
         {
             var incomingProductIds = request.Products.Select(p => p.ProductId).ToHashSet();
             var existingProducts = await _context.Products.ToListAsync();
-            var existingProductIds = existingProducts.Select(p => p.ProductId).ToHashSet();
+            var existingProductDict = existingProducts.ToDictionary(p => p.ProductId);
 
-            // 找出要刪除的商品（資料庫有但傳入的沒有）
-            var productsToDelete = existingProducts
-                .Where(p => !incomingProductIds.Contains(p.ProductId))
-                .ToList();
+            var productsToAdd = new List<Product>();
+            var productsToUpdate = new List<Product>();
+            var productsToMarkUnavailable = new List<Product>();
 
-            // 找出要新增的商品（傳入有但資料庫沒有）
-            var productsToAdd = request.Products
-                .Where(p => !existingProductIds.Contains(p.ProductId))
-                .Select(dto => new Product
-                {
-                    ProductId = dto.ProductId,
-                    Title = dto.Title,
-                    Price = dto.Price,
-                    ImageUrl = dto.ImageUrl,
-                    ProductUrl = dto.ProductUrl,
-                    Color = dto.Color
-                })
-                .ToList();
-
-            // 刪除商品
-            if (productsToDelete.Any())
+            // 處理傳入的商品
+            foreach (var dto in request.Products)
             {
-                _context.Products.RemoveRange(productsToDelete);
-                _logger.LogInformation("準備刪除 {count} 個商品", productsToDelete.Count);
+                if (existingProductDict.TryGetValue(dto.ProductId, out var existingProduct))
+                {
+                    // 商品已存在，檢查是否需要更新狀態
+                    if (!existingProduct.IsAvailable)
+                    {
+                        // 商品重新上架
+                        existingProduct.IsAvailable = true;
+                        existingProduct.UpdatedAt = DateTime.UtcNow;
+                        existingProduct.Title = dto.Title;
+                        existingProduct.Price = dto.Price;
+                        existingProduct.ImageUrl = dto.ImageUrl;
+                        existingProduct.ProductUrl = dto.ProductUrl;
+                        existingProduct.Color = dto.Color;
+                        productsToUpdate.Add(existingProduct);
+                        productsToAdd.Add(existingProduct); // 重新上架也算新品通知
+                    }
+                    // 如果已經是上架狀態，不做任何處理
+                }
+                else
+                {
+                    // 新商品
+                    var newProduct = new Product
+                    {
+                        ProductId = dto.ProductId,
+                        Title = dto.Title,
+                        Price = dto.Price,
+                        ImageUrl = dto.ImageUrl,
+                        ProductUrl = dto.ProductUrl,
+                        Color = dto.Color,
+                        IsAvailable = true
+                    };
+                    await _context.Products.AddAsync(newProduct);
+                    productsToAdd.Add(newProduct);
+                }
             }
 
-            // 新增商品
-            if (productsToAdd.Any())
+            // 找出要標記為下架的商品（資料庫有且是上架狀態，但傳入的沒有）
+            foreach (var existingProduct in existingProducts)
             {
-                await _context.Products.AddRangeAsync(productsToAdd);
-                _logger.LogInformation("準備新增 {count} 個商品", productsToAdd.Count);
+                if (existingProduct.IsAvailable && !incomingProductIds.Contains(existingProduct.ProductId))
+                {
+                    existingProduct.IsAvailable = false;
+                    existingProduct.UpdatedAt = DateTime.UtcNow;
+                    productsToMarkUnavailable.Add(existingProduct);
+                }
+            }
+
+            if (productsToUpdate.Any())
+            {
+                _logger.LogInformation("準備更新 {count} 個商品（重新上架）", productsToUpdate.Count);
+            }
+
+            if (productsToMarkUnavailable.Any())
+            {
+                _logger.LogInformation("準備標記 {count} 個商品為下架", productsToMarkUnavailable.Count);
             }
 
             await _context.SaveChangesAsync();
 
-            // 發送 LINE 通知（僅針對新增的商品）
+            // 發送 LINE 通知（僅針對新增或重新上架的商品）
             var notifiedCount = 0;
             if (productsToAdd.Any())
             {
@@ -81,9 +112,9 @@ public class ProductController : ControllerBase
             return Ok(new SyncProductsResponse
             {
                 AddedCount = productsToAdd.Count,
-                DeletedCount = productsToDelete.Count,
+                DeletedCount = productsToMarkUnavailable.Count,
                 NotifiedCount = notifiedCount,
-                Message = $"同步完成：新增 {productsToAdd.Count} 個商品，刪除 {productsToDelete.Count} 個商品，已通知 {notifiedCount} 個新商品"
+                Message = $"同步完成：新增/重新上架 {productsToAdd.Count} 個商品，下架 {productsToMarkUnavailable.Count} 個商品，已通知 {notifiedCount} 個商品"
             });
         }
         catch (Exception ex)
