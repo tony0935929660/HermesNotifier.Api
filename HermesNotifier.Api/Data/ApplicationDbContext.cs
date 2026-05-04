@@ -36,6 +36,9 @@ public class ApplicationDbContext : DbContext
 
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("GETUTCDATE()");
+
+            entity.Property(e => e.SubscribedUntil)
+                .HasDefaultValueSql("DATEADD(YEAR, 1, GETUTCDATE())");
         });
 
         modelBuilder.Entity<Product>(entity =>

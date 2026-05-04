@@ -15,4 +15,9 @@ public class User
     public DateTime? LastLoginAt { get; set; }
 
     public DateTime? SubscribedUntil { get; set; }
+
+    public User()
+    {
+        SubscribedUntil = DateTime.UtcNow.AddYears(1);
+    }
 }
