@@ -403,3 +403,7 @@ appsettings.json
 appsettings.Development.json
 appsettings.Production.json
 **/Properties/launchSettings.json
+
+# Azure deployment parameters with secrets
+azure/parameters.json
+azure/*.parameters.json

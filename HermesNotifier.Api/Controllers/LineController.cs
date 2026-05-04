@@ -76,17 +76,37 @@ namespace HermesNotifier.Api.Controllers
 
             var responseBody = await response.Content.ReadAsStringAsync();
 
-            var tokenResponse = JsonSerializer.Deserialize<LineTokenResponse>(
-                responseBody,
-                new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                }
-            );
+            // 記錄 LINE Token API 回應（用於診斷）
+            _logger.LogInformation("LINE Token API Status: {StatusCode}", response.StatusCode);
+            _logger.LogInformation("LINE Token API Response: {Response}", responseBody);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("LINE Token API 失敗 - StatusCode: {StatusCode}, Body: {Body}", 
+                    response.StatusCode, responseBody);
+                return BadRequest($"LINE Token API 錯誤: {response.StatusCode} - {responseBody}");
+            }
+
+            LineTokenResponse? tokenResponse = null;
+            try
+            {
+                tokenResponse = JsonSerializer.Deserialize<LineTokenResponse>(
+                    responseBody,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    }
+                );
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "JSON 反序列化失敗 - Response: {Response}", responseBody);
+                return BadRequest($"無法解析 LINE Token 回應: {ex.Message}");
+            }
 
             if (tokenResponse?.AccessToken == null)
             {
-                _logger.LogError("無法從 LINE 取得 Access Token");
+                _logger.LogError("Access Token 為空 - Response: {Response}", responseBody);
                 return BadRequest("無法取得 LINE Access Token");
             }
 

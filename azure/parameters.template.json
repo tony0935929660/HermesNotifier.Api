@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "containerAppName": {
+      "value": "hermesnotifier-api"
+    },
+    "environmentName": {
+      "value": "hermesnotifier-env"
+    },
+    "containerImage": {
+      "value": "ghcr.io/tony0935929660/hermesnotifier.api:latest"
+    },
+    "lineChannelId": {
+      "value": "2008323822"
+    },
+    "lineChannelSecret": {
+      "value": "YOUR_CHANNEL_SECRET_HERE"
+    },
+    "lineBotToken": {
+      "value": "YOUR_BOT_TOKEN_HERE"
+    },
+    "connectionString": {
+      "value": "Server=YOUR_SERVER.database.windows.net;Database=HermesNotifierDb;User Id=YOUR_USER;Password=YOUR_PASSWORD;Encrypt=True;TrustServerCertificate=False;"
+    },
+    "lineCallbackUrl": {
+      "value": "https://YOUR_CONTAINER_APP_URL/api/line/callback"
+    }
+  }
+}
