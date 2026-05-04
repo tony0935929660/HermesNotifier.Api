@@ -39,6 +39,7 @@ public class ProductController : ControllerBase
             var productsToAdd = new List<Product>();
             var productsToUpdate = new List<Product>();
             var productsToMarkUnavailable = new List<Product>();
+            var logsToAdd = new List<ProductLog>();
 
             // 處理傳入的商品
             foreach (var dto in request.Products)
@@ -100,7 +101,38 @@ public class ProductController : ControllerBase
                 _logger.LogInformation("準備標記 {count} 個商品為下架", productsToMarkUnavailable.Count);
             }
 
+            // 先儲存變更以取得新商品的 Id
             await _context.SaveChangesAsync();
+
+            // 建立上架記錄
+            foreach (var product in productsToAdd)
+            {
+                logsToAdd.Add(new ProductLog
+                {
+                    ProductId = product.Id,
+                    Action = "Available",
+                    LoggedAt = DateTime.UtcNow
+                });
+            }
+
+            // 建立下架記錄
+            foreach (var product in productsToMarkUnavailable)
+            {
+                logsToAdd.Add(new ProductLog
+                {
+                    ProductId = product.Id,
+                    Action = "Unavailable",
+                    LoggedAt = DateTime.UtcNow
+                });
+            }
+
+            // 儲存 Log
+            if (logsToAdd.Any())
+            {
+                await _context.ProductLogs.AddRangeAsync(logsToAdd);
+                await _context.SaveChangesAsync();
+                _logger.LogInformation("已記錄 {count} 筆商品狀態變更", logsToAdd.Count);
+            }
 
             // 發送 LINE 通知（僅針對新增或重新上架的商品）
             var notifiedCount = 0;

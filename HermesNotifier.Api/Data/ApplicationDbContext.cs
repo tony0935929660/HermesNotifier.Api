@@ -14,6 +14,8 @@ public class ApplicationDbContext : DbContext
 
     public DbSet<Product> Products { get; set; }
 
+    public DbSet<ProductLog> ProductLogs { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -74,6 +76,32 @@ public class ApplicationDbContext : DbContext
 
             // 建立索引以加速查詢上架中的商品
             entity.HasIndex(e => e.IsAvailable);
+        });
+
+        modelBuilder.Entity<ProductLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.ProductId)
+                .IsRequired();
+
+            entity.Property(e => e.Action)
+                .IsRequired()
+                .HasMaxLength(20);
+
+            entity.Property(e => e.LoggedAt)
+                .HasDefaultValueSql("GETUTCDATE()");
+
+            // 建立外鍵關聯
+            entity.HasOne(e => e.Product)
+                .WithMany()
+                .HasForeignKey(e => e.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // 建立索引
+            entity.HasIndex(e => e.ProductId);
+            entity.HasIndex(e => e.LoggedAt);
+            entity.HasIndex(e => e.Action);
         });
     }
 }
