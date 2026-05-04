@@ -54,13 +54,18 @@ public class ProductController : ControllerBase
                         existingProduct.UpdatedAt = DateTime.UtcNow;
                         existingProduct.Title = dto.Title;
                         existingProduct.Price = dto.Price;
-                        existingProduct.ImageUrl = dto.ImageUrl;
+
+                        // 只有當傳入的 ImageUrl 不為空時才更新，否則保留原有的
+                        if (!string.IsNullOrWhiteSpace(dto.ImageUrl))
+                        {
+                            existingProduct.ImageUrl = dto.ImageUrl;
+                        }
+
                         existingProduct.ProductUrl = dto.ProductUrl;
                         existingProduct.Color = dto.Color;
                         productsToUpdate.Add(existingProduct);
                         productsToAdd.Add(existingProduct); // 重新上架也算新品通知
                     }
-                    // 如果已經是上架狀態，不做任何處理
                 }
                 else
                 {
@@ -196,11 +201,21 @@ public class ProductController : ControllerBase
                 var batch = productBatches[batchIndex];
                 var bubbles = batch.Select(p =>
                 {
-                    var lineTargetUrl = p.ProductUrl;
-                    return new
+                    // 容錯處理：如果 ProductUrl 是空的，使用 Hermès 官網首頁
+                    var lineTargetUrl = string.IsNullOrWhiteSpace(p.ProductUrl) 
+                        ? HermesUrl 
+                        : p.ProductUrl;
+
+                    // 建立 bubble，如果有圖片就加上 hero
+                    var bubble = new Dictionary<string, object>
                     {
-                        type = "bubble",
-                        hero = new
+                        ["type"] = "bubble"
+                    };
+
+                    // 如果有圖片，加上 hero 區塊
+                    if (!string.IsNullOrWhiteSpace(p.ImageUrl))
+                    {
+                        bubble["hero"] = new
                         {
                             type = "image",
                             size = "full",
@@ -212,39 +227,53 @@ public class ProductController : ControllerBase
                                 type = "uri",
                                 uri = lineTargetUrl
                             }
-                        },
-                        body = new
+                        };
+                    }
+
+                    // body 區塊（必定存在）
+                    bubble["body"] = new
+                    {
+                        type = "box",
+                        layout = "vertical",
+                        spacing = "md",
+                        contents = new object[]
                         {
-                            type = "box",
-                            layout = "vertical",
-                            spacing = "md",
-                            contents = new object[]
+                            new
                             {
-                                new
-                                {
-                                    type = "text",
-                                    text = p.Title,
-                                    weight = "bold",
-                                    wrap = true,
-                                    size = "sm"
-                                },
-                                new
-                                {
-                                    type = "text",
-                                    text = $"NT$ {p.Price:N0}",
-                                    color = "#999999",
-                                    size = "xs"
-                                },
-                                new
-                                {
-                                    type = "text",
-                                    text = p.Color ?? "",
-                                    color = "#666666",
-                                    size = "xs"
-                                }
+                                type = "text",
+                                text = p.Title,
+                                weight = "bold",
+                                wrap = true,
+                                size = "sm"
+                            },
+                            new
+                            {
+                                type = "text",
+                                text = $"NT$ {p.Price:N0}",
+                                color = "#999999",
+                                size = "xs"
+                            },
+                            new
+                            {
+                                type = "text",
+                                text = p.Color ?? "",
+                                color = "#666666",
+                                size = "xs"
                             }
                         }
                     };
+
+                    // 如果沒有圖片，在 body 加上點擊連結的 action
+                    if (string.IsNullOrWhiteSpace(p.ImageUrl))
+                    {
+                        bubble["action"] = new
+                        {
+                            type = "uri",
+                            uri = lineTargetUrl
+                        };
+                    }
+
+                    return bubble;
                 }).ToList();
 
                 var flexMessage = new

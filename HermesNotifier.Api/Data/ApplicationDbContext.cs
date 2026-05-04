@@ -60,7 +60,6 @@ public class ApplicationDbContext : DbContext
                 .HasPrecision(18, 2);
 
             entity.Property(e => e.ImageUrl)
-                .IsRequired()
                 .HasMaxLength(500);
 
             entity.Property(e => e.ProductUrl)

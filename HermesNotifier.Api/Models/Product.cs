@@ -10,7 +10,7 @@ public class Product
 
     public decimal Price { get; set; }
 
-    public required string ImageUrl { get; set; }
+    public string? ImageUrl { get; set; }
 
     public required string ProductUrl { get; set; }
 
