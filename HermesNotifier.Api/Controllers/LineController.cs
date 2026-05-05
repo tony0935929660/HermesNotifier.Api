@@ -185,58 +185,104 @@ namespace HermesNotifier.Api.Controllers
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>{title}</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400&display=swap');
+
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+
         body {{
-            font-family: Arial, sans-serif;
+            font-family: 'Noto Serif TC', Georgia, serif;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            background: #FAF7F2;
+            padding: 20px;
         }}
+
         .container {{
-            background: white;
-            padding: 40px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            background: #FFFFFF;
+            padding: 80px 50px;
             text-align: center;
-            max-width: 400px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.03);
         }}
-        .success-icon {{
-            font-size: 60px;
-            color: #4CAF50;
-            margin-bottom: 20px;
+
+        .brand {{
+            font-size: 14px;
+            letter-spacing: 4px;
+            color: #1A1A1A;
+            font-weight: 300;
+            margin-bottom: 80px;
+            text-transform: uppercase;
         }}
+
         h1 {{
-            color: #333;
-            margin-bottom: 10px;
-            font-size: 24px;
-        }}
-        p {{
-            color: #666;
+            color: #1A1A1A;
+            font-size: 28px;
+            font-weight: 300;
+            letter-spacing: 2px;
+            margin-bottom: 60px;
             line-height: 1.6;
-            margin-bottom: 20px;
         }}
-        .info {{
-            background: #f5f5f5;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
+
+        .message {{
+            color: #4A4A4A;
+            font-size: 18px;
+            font-weight: 300;
+            line-height: 2;
+            margin-bottom: 70px;
+            letter-spacing: 1px;
         }}
+
+        .countdown-box {{
+            border-top: 1px solid #E8E8E8;
+            padding-top: 30px;
+        }}
+
+        .countdown-text {{
+            color: #8A8A8A;
+            font-size: 14px;
+            letter-spacing: 1px;
+            font-weight: 300;
+        }}
+
         .countdown {{
-            color: #667eea;
-            font-weight: bold;
+            display: inline-block;
+            color: #FF6B35;
+            font-size: 20px;
+            font-weight: 400;
+            min-width: 20px;
+            letter-spacing: 0;
+        }}
+
+        @media (max-width: 480px) {{
+            .container {{
+                padding: 60px 30px;
+            }}
+
+            h1 {{
+                font-size: 24px;
+            }}
+
+            .message {{
+                font-size: 16px;
+            }}
         }}
     </style>
 </head>
 <body>
     <div class='container'>
-        <div class='success-icon'>✓</div>
+        <div class='brand'>HERMES NOTIFIER</div>
         <h1>{title}</h1>
-        <div class='info'>
-            <p>{message}</p>
+        <div class='message'>{message}</div>
+        <div class='countdown-box'>
+            <p class='countdown-text'>視窗將在 <span class='countdown' id='countdown'>3</span> 秒後自動關閉</p>
         </div>
-        <p>視窗將在 <span class='countdown' id='countdown'>3</span> 秒後自動關閉...</p>
     </div>
     <script>
         let seconds = 3;
@@ -250,19 +296,19 @@ namespace HermesNotifier.Api.Controllers
 
             if (seconds <= 0) {{
                 clearInterval(interval);
-                // 嘗試關閉視窗
                 window.close();
 
-                // 如果 window.close() 無效（某些瀏覽器不允許關閉非腳本開啟的視窗）
-                // 顯示提示訊息
                 setTimeout(() => {{
-                    document.body.innerHTML = `
-                        <div class='container'>
-                            <div class='success-icon'>✓</div>
+                    const container = document.querySelector('.container');
+                    if (container) {{
+                        container.innerHTML = `
+                            <div class='brand'>HERMES NOTIFIER</div>
                             <h1>完成</h1>
-                            <p>請手動關閉此視窗</p>
-                        </div>
-                    `;
+                            <div class='countdown-box'>
+                                <p class='countdown-text'>請手動關閉此視窗</p>
+                            </div>
+                        `;
+                    }}
                 }}, 500);
             }}
         }}, 1000);
