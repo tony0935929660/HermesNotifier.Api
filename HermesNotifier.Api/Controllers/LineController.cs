@@ -294,6 +294,16 @@ namespace HermesNotifier.Api.Controllers
     </div>
     <script src='https://static.line-scdn.net/liff/edge/2/sdk.js'></script>
     <script>
+        // 立即清除 URL 中的敏感參數，防止重複請求
+        if (window.history && window.history.replaceState) {{
+            const url = new URL(window.location.href);
+            if (url.searchParams.has('code')) {{
+                url.searchParams.delete('code');
+                url.searchParams.delete('state');
+                window.history.replaceState({{}}, document.title, url.toString());
+            }}
+        }}
+
         let seconds = 3;
         const countdownElement = document.getElementById('countdown');
         let liffInitialized = false;
