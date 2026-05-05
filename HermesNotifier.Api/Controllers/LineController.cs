@@ -160,7 +160,7 @@ namespace HermesNotifier.Api.Controllers
 
                 _logger.LogInformation("新增使用者：LineId={LineId}, Name={Name}", lineUserId, displayName);
 
-                return Content($"歡迎！已建立帳號\nLine UserId: {lineUserId}\nName: {displayName}");
+                return GenerateSuccessHtml("綁定成功", $"歡迎！已建立帳號<br>Name: {displayName}");
             }
             else
             {
@@ -171,8 +171,106 @@ namespace HermesNotifier.Api.Controllers
 
                 _logger.LogInformation("使用者登入：LineId={LineId}, Name={Name}", lineUserId, displayName);
 
-                return Content($"歡迎回來！\nLine UserId: {lineUserId}\nName: {displayName}");
+                return GenerateSuccessHtml("登入成功", $"歡迎回來！<br>Name: {displayName}");
             }
+        }
+
+        private ContentResult GenerateSuccessHtml(string title, string message)
+        {
+            var html = $@"
+<!DOCTYPE html>
+<html lang='zh-TW'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>{title}</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }}
+        .container {{
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+        }}
+        .success-icon {{
+            font-size: 60px;
+            color: #4CAF50;
+            margin-bottom: 20px;
+        }}
+        h1 {{
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }}
+        p {{
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }}
+        .info {{
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }}
+        .countdown {{
+            color: #667eea;
+            font-weight: bold;
+        }}
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='success-icon'>✓</div>
+        <h1>{title}</h1>
+        <div class='info'>
+            <p>{message}</p>
+        </div>
+        <p>視窗將在 <span class='countdown' id='countdown'>3</span> 秒後自動關閉...</p>
+    </div>
+    <script>
+        let seconds = 3;
+        const countdownElement = document.getElementById('countdown');
+
+        const interval = setInterval(() => {{
+            seconds--;
+            if (countdownElement) {{
+                countdownElement.textContent = seconds;
+            }}
+
+            if (seconds <= 0) {{
+                clearInterval(interval);
+                // 嘗試關閉視窗
+                window.close();
+
+                // 如果 window.close() 無效（某些瀏覽器不允許關閉非腳本開啟的視窗）
+                // 顯示提示訊息
+                setTimeout(() => {{
+                    document.body.innerHTML = `
+                        <div class='container'>
+                            <div class='success-icon'>✓</div>
+                            <h1>完成</h1>
+                            <p>請手動關閉此視窗</p>
+                        </div>
+                    `;
+                }}, 500);
+            }}
+        }}, 1000);
+    </script>
+</body>
+</html>";
+
+            return Content(html, "text/html");
         }
     }
 }
