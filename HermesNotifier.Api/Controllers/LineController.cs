@@ -183,6 +183,8 @@ namespace HermesNotifier.Api.Controllers
 
         private ContentResult GenerateSuccessHtml(string title, string message)
         {
+            var liffId = _config["Line:LiffId"] ?? "";
+
             var html = $@"
 <!DOCTYPE html>
 <html lang='zh-TW'>
@@ -290,9 +292,24 @@ namespace HermesNotifier.Api.Controllers
             <p class='countdown-text'>視窗將在 <span class='countdown' id='countdown'>3</span> 秒後自動關閉</p>
         </div>
     </div>
+    <script src='https://static.line-scdn.net/liff/edge/2/sdk.js'></script>
     <script>
         let seconds = 3;
         const countdownElement = document.getElementById('countdown');
+        let liffInitialized = false;
+
+        // 初始化 LIFF
+        const liffId = '{liffId}';
+        if (liffId) {{
+            liff.init({{
+                liffId: liffId
+            }}).then(() => {{
+                liffInitialized = true;
+                console.log('LIFF initialized');
+            }}).catch((err) => {{
+                console.error('LIFF initialization failed', err);
+            }});
+        }}
 
         const interval = setInterval(() => {{
             seconds--;
@@ -302,20 +319,28 @@ namespace HermesNotifier.Api.Controllers
 
             if (seconds <= 0) {{
                 clearInterval(interval);
-                window.close();
 
-                setTimeout(() => {{
-                    const container = document.querySelector('.container');
-                    if (container) {{
-                        container.innerHTML = `
-                            <div class='brand'>HERMES NOTIFIER</div>
-                            <h1>完成</h1>
-                            <div class='countdown-box'>
-                                <p class='countdown-text'>請手動關閉此視窗</p>
-                            </div>
-                        `;
-                    }}
-                }}, 500);
+                // 嘗試使用 LIFF 關閉視窗
+                if (liffInitialized && liff.isInClient()) {{
+                    liff.closeWindow();
+                }} else {{
+                    // 如果不在 LINE 環境中，嘗試使用 window.close()
+                    window.close();
+
+                    // 如果無法關閉，顯示提示訊息
+                    setTimeout(() => {{
+                        const container = document.querySelector('.container');
+                        if (container) {{
+                            container.innerHTML = `
+                                <div class='brand'>HERMES NOTIFIER</div>
+                                <h1>完成</h1>
+                                <div class='countdown-box'>
+                                    <p class='countdown-text'>請手動關閉此視窗</p>
+                                </div>
+                            `;
+                        }}
+                    }}, 500);
+                }}
             }}
         }}, 1000);
     </script>
