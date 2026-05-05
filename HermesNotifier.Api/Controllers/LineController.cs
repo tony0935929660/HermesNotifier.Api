@@ -228,6 +228,9 @@ namespace HermesNotifier.Api.Controllers
                     // 發送歡迎訊息
                     await SendWelcomeMessageAsync(request.LineId);
 
+                    // 發送最新一批商品資訊給新用戶
+                    await SendLatestProductsToUserAsync(request.LineId);
+
                     isNewUser = true;
                     message = "歡迎！已建立帳號<br>您可享有 7 日試用期";
                 }
@@ -647,6 +650,176 @@ namespace HermesNotifier.Api.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "發送已綁定訊息時發生錯誤：LineId={LineId}", lineUserId);
+            }
+        }
+
+        private async Task SendLatestProductsToUserAsync(string lineUserId)
+        {
+            try
+            {
+                var channelAccessToken = _config["Line:ChannelAccessToken"]
+                    ?? throw new InvalidOperationException("Line:ChannelAccessToken is missing");
+
+                // 獲取最新一批上架的商品（通過最新的 Available log）
+                var latestAvailableLog = await _context.ProductLogs
+                    .Where(log => log.Action == "Available")
+                    .OrderByDescending(log => log.LoggedAt)
+                    .FirstOrDefaultAsync();
+
+                if (latestAvailableLog == null)
+                {
+                    _logger.LogInformation("沒有找到最新的商品上架記錄，跳過發送商品資訊");
+                    return;
+                }
+
+                // 獲取同一時間批次上架的所有商品
+                var latestLogTime = latestAvailableLog.LoggedAt;
+                var timeThreshold = latestLogTime.AddMinutes(-5); // 5分鐘內的視為同一批次
+
+                var latestProductIds = await _context.ProductLogs
+                    .Where(log => log.Action == "Available" && log.LoggedAt >= timeThreshold && log.LoggedAt <= latestLogTime)
+                    .Select(log => log.ProductId)
+                    .ToListAsync();
+
+                if (!latestProductIds.Any())
+                {
+                    _logger.LogInformation("沒有找到最新批次的商品，跳過發送商品資訊");
+                    return;
+                }
+
+                // 獲取這些商品的詳細資訊
+                var products = await _context.Products
+                    .Where(p => latestProductIds.Contains(p.Id) && p.IsAvailable)
+                    .ToListAsync();
+
+                if (!products.Any())
+                {
+                    _logger.LogInformation("找到的商品已下架，跳過發送商品資訊");
+                    return;
+                }
+
+                _logger.LogInformation("準備發送 {count} 個最新商品給新用戶：LineId={LineId}", products.Count, lineUserId);
+
+                const string hermesUrl = "https://www.hermes.com/tw/zh/";
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = 
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", channelAccessToken);
+
+                // 將商品分批，每次最多12個
+                var productBatches = products.Chunk(12).ToArray();
+
+                foreach (var batch in productBatches)
+                {
+                    var bubbles = batch.Select(p =>
+                    {
+                        var lineTargetUrl = string.IsNullOrWhiteSpace(p.ProductUrl) 
+                            ? hermesUrl 
+                            : p.ProductUrl;
+
+                        var bubble = new Dictionary<string, object>
+                        {
+                            ["type"] = "bubble"
+                        };
+
+                        // 如果有圖片，加上 hero 區塊
+                        if (!string.IsNullOrWhiteSpace(p.ImageUrl))
+                        {
+                            bubble["hero"] = new
+                            {
+                                type = "image",
+                                size = "full",
+                                aspectRatio = "1:1",
+                                aspectMode = "cover",
+                                url = p.ImageUrl,
+                                action = new
+                                {
+                                    type = "uri",
+                                    uri = lineTargetUrl
+                                }
+                            };
+                        }
+
+                        // body 區塊
+                        bubble["body"] = new
+                        {
+                            type = "box",
+                            layout = "vertical",
+                            spacing = "md",
+                            contents = new object[]
+                            {
+                                new
+                                {
+                                    type = "text",
+                                    text = p.Title,
+                                    weight = "bold",
+                                    wrap = true,
+                                    size = "sm"
+                                },
+                                new
+                                {
+                                    type = "text",
+                                    text = $"NT$ {p.Price:N0}",
+                                    color = "#999999",
+                                    size = "xs"
+                                },
+                                new
+                                {
+                                    type = "text",
+                                    text = p.Color ?? "",
+                                    color = "#666666",
+                                    size = "xs"
+                                }
+                            }
+                        };
+
+                        // 如果沒有圖片，在 body 加上點擊連結的 action
+                        if (string.IsNullOrWhiteSpace(p.ImageUrl))
+                        {
+                            bubble["action"] = new
+                            {
+                                type = "uri",
+                                uri = lineTargetUrl
+                            };
+                        }
+
+                        return bubble;
+                    }).ToList();
+
+                    var flexMessage = new
+                    {
+                        type = "flex",
+                        altText = $"Hermès 最新商品 - 共 {products.Count} 件",
+                        contents = new
+                        {
+                            type = "carousel",
+                            contents = bubbles
+                        }
+                    };
+
+                    var message = new
+                    {
+                        to = lineUserId,
+                        messages = new[] { flexMessage }
+                    };
+
+                    var response = await client.PostAsJsonAsync("https://api.line.me/v2/bot/message/push", message);
+                    var responseBody = await response.Content.ReadAsStringAsync();
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        _logger.LogInformation("最新商品發送成功：LineId={LineId}, 商品數={ProductCount}", 
+                            lineUserId, batch.Count());
+                    }
+                    else
+                    {
+                        _logger.LogError("最新商品發送失敗：LineId={LineId}, Status={Status}, Response={Response}", 
+                            lineUserId, response.StatusCode, responseBody);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "發送最新商品時發生錯誤：LineId={LineId}", lineUserId);
             }
         }
     }
