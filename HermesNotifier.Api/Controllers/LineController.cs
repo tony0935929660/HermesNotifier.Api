@@ -229,7 +229,7 @@ namespace HermesNotifier.Api.Controllers
                     await SendWelcomeMessageAsync(request.LineId);
 
                     isNewUser = true;
-                    message = $"歡迎！已建立帳號\\n您可享有 7 日試用期";
+                    message = "歡迎！已建立帳號<br>您可享有 7 日試用期";
                 }
                 else
                 {
@@ -244,7 +244,7 @@ namespace HermesNotifier.Api.Controllers
                     await SendAlreadyBoundMessageAsync(request.LineId);
 
                     isNewUser = false;
-                    message = $"歡迎回來！\\n如需續用，請聯絡客服";
+                    message = "歡迎回來！<br>如需續用，請聯絡客服";
                 }
 
                 return Ok(new 
