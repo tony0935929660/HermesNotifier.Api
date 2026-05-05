@@ -10,6 +10,7 @@
 
 - **ChannelId**: Your LINE Channel ID from LINE Developers Console
 - **ChannelSecret**: Your LINE Channel Secret from LINE Developers Console
+- **ChannelAccessToken**: Your LINE Channel Access Token from LINE Developers Console (Messaging API tab)
 - **CallbackUrl**: Your OAuth callback URL (e.g., `https://yourdomain.com/api/line/callback`)
 
 ### Example
@@ -19,6 +20,7 @@
   "Line": {
 	"ChannelId": "1234567890",
 	"ChannelSecret": "abcdef1234567890abcdef1234567890",
+	"ChannelAccessToken": "your_channel_access_token_here",
 	"CallbackUrl": "https://localhost:7001/api/line/callback"
   }
 }

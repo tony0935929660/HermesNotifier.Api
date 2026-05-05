@@ -160,6 +160,9 @@ namespace HermesNotifier.Api.Controllers
 
                 _logger.LogInformation("新增使用者：LineId={LineId}, Name={Name}", lineUserId, displayName);
 
+                // 發送歡迎訊息
+                await SendWelcomeMessageAsync(lineUserId);
+
                 return GenerateSuccessHtml("綁定成功", $"歡迎！已建立帳號<br>Name: {displayName}");
             }
             else
@@ -170,6 +173,9 @@ namespace HermesNotifier.Api.Controllers
                 await _context.SaveChangesAsync();
 
                 _logger.LogInformation("使用者登入：LineId={LineId}, Name={Name}", lineUserId, displayName);
+
+                // 發送已綁定訊息
+                await SendAlreadyBoundMessageAsync(lineUserId);
 
                 return GenerateSuccessHtml("登入成功", $"歡迎回來！<br>Name: {displayName}");
             }
@@ -317,6 +323,92 @@ namespace HermesNotifier.Api.Controllers
 </html>";
 
             return Content(html, "text/html");
+        }
+
+        private async Task SendWelcomeMessageAsync(string lineUserId)
+        {
+            try
+            {
+                var channelAccessToken = _config["Line:ChannelAccessToken"]
+                    ?? throw new InvalidOperationException("Line:ChannelAccessToken is missing");
+
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = 
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", channelAccessToken);
+
+                var message = new
+                {
+                    to = lineUserId,
+                    messages = new[]
+                    {
+                        new
+                        {
+                            type = "text",
+                            text = "帳號已成功綁定。\n您可享有 7 日試用期，試用結束後如需續用，請聯繫客服。"
+                        }
+                    }
+                };
+
+                var response = await client.PostAsJsonAsync("https://api.line.me/v2/bot/message/push", message);
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation("歡迎訊息發送成功：LineId={LineId}", lineUserId);
+                }
+                else
+                {
+                    _logger.LogError("歡迎訊息發送失敗：LineId={LineId}, Status={Status}, Response={Response}", 
+                        lineUserId, response.StatusCode, responseBody);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "發送歡迎訊息時發生錯誤：LineId={LineId}", lineUserId);
+            }
+        }
+
+        private async Task SendAlreadyBoundMessageAsync(string lineUserId)
+        {
+            try
+            {
+                var channelAccessToken = _config["Line:ChannelAccessToken"]
+                    ?? throw new InvalidOperationException("Line:ChannelAccessToken is missing");
+
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = 
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", channelAccessToken);
+
+                var message = new
+                {
+                    to = lineUserId,
+                    messages = new[]
+                    {
+                        new
+                        {
+                            type = "text",
+                            text = "您已經綁定過，如需續用，請聯絡客服。"
+                        }
+                    }
+                };
+
+                var response = await client.PostAsJsonAsync("https://api.line.me/v2/bot/message/push", message);
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation("已綁定訊息發送成功：LineId={LineId}", lineUserId);
+                }
+                else
+                {
+                    _logger.LogError("已綁定訊息發送失敗：LineId={LineId}, Status={Status}, Response={Response}", 
+                        lineUserId, response.StatusCode, responseBody);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "發送已綁定訊息時發生錯誤：LineId={LineId}", lineUserId);
+            }
         }
     }
 }

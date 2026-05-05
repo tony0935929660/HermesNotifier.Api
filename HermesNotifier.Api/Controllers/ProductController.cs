@@ -166,10 +166,10 @@ public class ProductController : ControllerBase
 
     private async Task<int> BroadcastLineMessageAsync(List<Product> products)
     {
-        var token = Environment.GetEnvironmentVariable("LINE_BOT_CHANNEL_ACCESS_TOKEN");
+        var token = _config["Line:ChannelAccessToken"];
         if (string.IsNullOrWhiteSpace(token))
         {
-            _logger.LogWarning("環境變數 LINE_BOT_CHANNEL_ACCESS_TOKEN 未設定，無法使用 LINE Messaging API 廣播。");
+            _logger.LogWarning("Line:ChannelAccessToken 未設定，無法使用 LINE Messaging API 廣播。");
             return 0;
         }
 
