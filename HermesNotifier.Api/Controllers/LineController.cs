@@ -29,21 +29,242 @@ namespace HermesNotifier.Api.Controllers
         [HttpGet("bind")]
         public IActionResult Bind()
         {
-            var channelId = _config["Line:ChannelId"]
-                ?? throw new InvalidOperationException("Line:ChannelId is missing");
-            var callbackUrl = _config["Line:CallbackUrl"] 
-                ?? throw new InvalidOperationException("Line:CallbackUrl is missing");
-            var state = Guid.NewGuid().ToString("N");
+            var liffId = _config["Line:LiffId"] ?? "";
 
-            var url =
-                "https://access.line.me/oauth2/v2.1/authorize" +
-                "?response_type=code" +
-                $"&client_id={channelId}" +
-                $"&redirect_uri={Uri.EscapeDataString(callbackUrl)}" +
-                $"&state={state}" +
-                "&scope=profile%20openid";
+            var html = $@"
+<!DOCTYPE html>
+<html lang='zh-TW'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>綁定帳號</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400&display=swap');
 
-            return Redirect(url);
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+
+        body {{
+            font-family: 'Noto Serif TC', Georgia, serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #FAF7F2;
+            padding: 20px;
+        }}
+
+        .container {{
+            background: #FFFFFF;
+            padding: 80px 50px;
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.03);
+        }}
+
+        .brand {{
+            font-size: 14px;
+            letter-spacing: 4px;
+            color: #1A1A1A;
+            font-weight: 300;
+            margin-bottom: 80px;
+            text-transform: uppercase;
+        }}
+
+        h1 {{
+            color: #1A1A1A;
+            font-size: 28px;
+            font-weight: 300;
+            letter-spacing: 2px;
+            margin-bottom: 60px;
+            line-height: 1.6;
+        }}
+
+        .message {{
+            color: #4A4A4A;
+            font-size: 18px;
+            font-weight: 300;
+            line-height: 2;
+            margin-bottom: 70px;
+            letter-spacing: 1px;
+        }}
+
+        .loading {{
+            display: inline-block;
+            width: 50px;
+            height: 50px;
+            border: 3px solid #E8E8E8;
+            border-top-color: #FF6B35;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }}
+
+        @keyframes spin {{
+            to {{ transform: rotate(360deg); }}
+        }}
+
+        @media (max-width: 480px) {{
+            .container {{
+                padding: 60px 30px;
+            }}
+
+            h1 {{
+                font-size: 24px;
+            }}
+
+            .message {{
+                font-size: 16px;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='brand'>HERMES NOTIFIER</div>
+        <div class='loading'></div>
+        <h1 id='title'>處理中</h1>
+        <div class='message' id='message'>正在綁定您的帳號...</div>
+    </div>
+    <script src='https://static.line-scdn.net/liff/edge/2/sdk.js'></script>
+    <script>
+        const liffId = '{liffId}';
+        const titleEl = document.getElementById('title');
+        const messageEl = document.getElementById('message');
+
+        async function bindAccount() {{
+            try {{
+                // 初始化 LIFF
+                await liff.init({{ liffId: liffId }});
+
+                // 檢查是否已登入
+                if (!liff.isLoggedIn()) {{
+                    // 如果未登入，導向 LINE 登入
+                    liff.login();
+                    return;
+                }}
+
+                // 取得用戶 Profile
+                const profile = await liff.getProfile();
+
+                // 呼叫後端 API 綁定帳號
+                const response = await fetch('/api/line/bind-liff', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                    }},
+                    body: JSON.stringify({{
+                        lineId: profile.userId,
+                        displayName: profile.displayName
+                    }})
+                }});
+
+                const result = await response.json();
+
+                if (response.ok) {{
+                    // 綁定成功
+                    titleEl.textContent = result.isNewUser ? '綁定成功' : '登入成功';
+                    messageEl.textContent = result.message;
+
+                    // 3 秒後關閉視窗
+                    setTimeout(() => {{
+                        liff.closeWindow();
+                    }}, 3000);
+                }} else {{
+                    // 綁定失敗
+                    titleEl.textContent = '綁定失敗';
+                    messageEl.textContent = result.message || '發生錯誤，請稍後再試';
+                }}
+            }} catch (err) {{
+                console.error('LIFF Error:', err);
+                titleEl.textContent = '發生錯誤';
+                messageEl.textContent = '無法連接服務，請稍後再試';
+            }}
+        }}
+
+        bindAccount();
+    </script>
+</body>
+</html>";
+
+            return Content(html, "text/html");
+        }
+
+        [HttpPost("bind-liff")]
+        public async Task<IActionResult> BindLiff([FromBody] LiffBindRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(request.LineId))
+                {
+                    return BadRequest(new { message = "Line ID 不能為空" });
+                }
+
+                // 檢查使用者是否已存在
+                var existingUser = await _context.Users
+                    .FirstOrDefaultAsync(u => u.LineId == request.LineId);
+
+                bool isNewUser = false;
+                string message;
+
+                if (existingUser == null)
+                {
+                    // 建立新使用者
+                    var newUser = new User
+                    {
+                        LineId = request.LineId,
+                        Name = request.DisplayName,
+                        LastLoginAt = DateTime.UtcNow
+                    };
+
+                    _context.Users.Add(newUser);
+                    await _context.SaveChangesAsync();
+
+                    _logger.LogInformation("新增使用者：LineId={LineId}, Name={Name}", request.LineId, request.DisplayName);
+
+                    // 發送歡迎訊息
+                    await SendWelcomeMessageAsync(request.LineId);
+
+                    isNewUser = true;
+                    message = $"歡迎！已建立帳號\\n您可享有 7 日試用期";
+                }
+                else
+                {
+                    // 更新最後登入時間
+                    existingUser.LastLoginAt = DateTime.UtcNow;
+                    existingUser.Name = request.DisplayName;
+                    await _context.SaveChangesAsync();
+
+                    _logger.LogInformation("使用者登入：LineId={LineId}, Name={Name}", request.LineId, request.DisplayName);
+
+                    // 發送已綁定訊息
+                    await SendAlreadyBoundMessageAsync(request.LineId);
+
+                    isNewUser = false;
+                    message = $"歡迎回來！\\n如需續用，請聯絡客服";
+                }
+
+                return Ok(new 
+                { 
+                    success = true, 
+                    isNewUser = isNewUser,
+                    message = message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "LIFF 綁定失敗");
+                return StatusCode(500, new { message = "伺服器錯誤，請稍後再試" });
+            }
+        }
+
+        public class LiffBindRequest
+        {
+            public string LineId { get; set; } = string.Empty;
+            public string DisplayName { get; set; } = string.Empty;
         }
 
         [HttpGet("callback")]
@@ -292,34 +513,12 @@ namespace HermesNotifier.Api.Controllers
             <p class='countdown-text'>視窗將在 <span class='countdown' id='countdown'>3</span> 秒後自動關閉</p>
         </div>
     </div>
-    <script src='https://static.line-scdn.net/liff/edge/2/sdk.js'></script>
     <script>
-        // 立即清除 URL 中的敏感參數，防止重複請求
-        if (window.history && window.history.replaceState) {{
-            const url = new URL(window.location.href);
-            if (url.searchParams.has('code')) {{
-                url.searchParams.delete('code');
-                url.searchParams.delete('state');
-                window.history.replaceState({{}}, document.title, url.toString());
-            }}
-        }}
+        // 檢測是否在 LINE 內建瀏覽器中
+        const isLineApp = /Line/i.test(navigator.userAgent);
 
         let seconds = 3;
         const countdownElement = document.getElementById('countdown');
-        let liffInitialized = false;
-
-        // 初始化 LIFF
-        const liffId = '{liffId}';
-        if (liffId) {{
-            liff.init({{
-                liffId: liffId
-            }}).then(() => {{
-                liffInitialized = true;
-                console.log('LIFF initialized');
-            }}).catch((err) => {{
-                console.error('LIFF initialization failed', err);
-            }});
-        }}
 
         const interval = setInterval(() => {{
             seconds--;
@@ -330,24 +529,35 @@ namespace HermesNotifier.Api.Controllers
             if (seconds <= 0) {{
                 clearInterval(interval);
 
-                // 嘗試使用 LIFF 關閉視窗
-                if (liffInitialized && liff.isInClient()) {{
-                    liff.closeWindow();
+                // 嘗試關閉視窗
+                if (isLineApp) {{
+                    // 在 LINE 中，嘗試使用 LINE 的關閉方法
+                    if (window.LineIt && window.LineIt.closeWindow) {{
+                        window.LineIt.closeWindow();
+                    }} else {{
+                        window.close();
+                    }}
                 }} else {{
-                    // 如果不在 LINE 環境中，嘗試使用 window.close()
+                    // 在外部瀏覽器，嘗試關閉
                     window.close();
+                }}
 
-                    // 如果無法關閉，顯示提示訊息
-                    setTimeout(() => {{
-                        const container = document.querySelector('.container');
-                        if (container) {{
-                            container.innerHTML = `
-                                <div class='brand'>HERMES NOTIFIER</div>
-                                <h1>完成</h1>
-                                <div class='countdown-box'>
-                                    <p class='countdown-text'>請手動關閉此視窗</p>
-                                </div>
-                            `;
+                // 如果無法關閉，顯示提示訊息
+                setTimeout(() => {{
+                    const container = document.querySelector('.container');
+                    if (container) {{
+                        container.innerHTML = `
+                            <div class='brand'>HERMES NOTIFIER</div>
+                            <h1>完成</h1>
+                            <div class='countdown-box'>
+                                <p class='countdown-text'>請手動關閉此視窗</p>
+                            </div>
+                        `;
+                    }}
+                }}, 500);
+            }}
+        }}, 1000);
+    </script>
                         }}
                     }}, 500);
                 }}
