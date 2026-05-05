@@ -297,15 +297,10 @@ namespace HermesNotifier.Api.Controllers
 
             var responseBody = await response.Content.ReadAsStringAsync();
 
-            // 記錄 LINE Token API 回應（用於診斷）
-            _logger.LogInformation("LINE Token API Status: {StatusCode}", response.StatusCode);
-            _logger.LogInformation("LINE Token API Response: {Response}", responseBody);
-
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogError("LINE Token API 失敗 - StatusCode: {StatusCode}, Body: {Body}", 
-                    response.StatusCode, responseBody);
-                return BadRequest($"LINE Token API 錯誤: {response.StatusCode} - {responseBody}");
+                _logger.LogError("LINE Token API 失敗 - StatusCode: {StatusCode}", response.StatusCode);
+                return BadRequest("LINE 授權失敗，請重試");
             }
 
             LineTokenResponse? tokenResponse = null;
@@ -321,14 +316,14 @@ namespace HermesNotifier.Api.Controllers
             }
             catch (JsonException ex)
             {
-                _logger.LogError(ex, "JSON 反序列化失敗 - Response: {Response}", responseBody);
-                return BadRequest($"無法解析 LINE Token 回應: {ex.Message}");
+                _logger.LogError(ex, "無法解析 LINE Token 回應");
+                return BadRequest("LINE 授權失敗，請重試");
             }
 
             if (tokenResponse?.AccessToken == null)
             {
-                _logger.LogError("Access Token 為空 - Response: {Response}", responseBody);
-                return BadRequest("無法取得 LINE Access Token");
+                _logger.LogError("Access Token 為空");
+                return BadRequest("LINE 授權失敗，請重試");
             }
 
             // 使用 Access Token 呼叫 LINE Profile API 取得真正的 User ID
@@ -339,8 +334,7 @@ namespace HermesNotifier.Api.Controllers
 
             if (!profileResponse.IsSuccessStatusCode)
             {
-                var errorBody = await profileResponse.Content.ReadAsStringAsync();
-                _logger.LogError("無法取得 LINE Profile: {error}", errorBody);
+                _logger.LogError("無法取得 LINE Profile");
                 return BadRequest("無法取得 LINE 使用者資訊");
             }
 
