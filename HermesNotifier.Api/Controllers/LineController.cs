@@ -167,7 +167,7 @@ namespace HermesNotifier.Api.Controllers
                 if (response.ok) {{
                     // 綁定成功
                     titleEl.textContent = result.isNewUser ? '綁定成功' : '登入成功';
-                    messageEl.textContent = result.message;
+                    messageEl.innerHTML = result.message;
 
                     // 3 秒後關閉視窗
                     setTimeout(() => {{
@@ -176,12 +176,12 @@ namespace HermesNotifier.Api.Controllers
                 }} else {{
                     // 綁定失敗
                     titleEl.textContent = '綁定失敗';
-                    messageEl.textContent = result.message || '發生錯誤，請稍後再試';
+                    messageEl.innerHTML = result.message || '發生錯誤，請稍後再試';
                 }}
             }} catch (err) {{
                 console.error('LIFF Error:', err);
                 titleEl.textContent = '發生錯誤';
-                messageEl.textContent = '無法連接服務，請稍後再試';
+                messageEl.innerHTML = '無法連接服務，請稍後再試';
             }}
         }}
 
