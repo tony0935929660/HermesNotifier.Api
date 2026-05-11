@@ -36,7 +36,7 @@ public class ProductController : ControllerBase
             var existingProducts = await _context.Products.ToListAsync();
             var existingProductDict = existingProducts.ToDictionary(p => p.ProductId);
 
-            var productsToAdd = new List<Product>();
+            var productsToNotify = new List<Product>();
             var productsToUpdate = new List<Product>();
             var productsToMarkUnavailable = new List<Product>();
             var logsToAdd = new List<ProductLog>();
@@ -46,7 +46,7 @@ public class ProductController : ControllerBase
             {
                 if (existingProductDict.TryGetValue(dto.ProductId, out var existingProduct))
                 {
-                    // 商品已存在，檢查是否需要更新狀態
+                    // 商品已存在
                     if (!existingProduct.IsAvailable)
                     {
                         // 商品重新上架
@@ -64,7 +64,48 @@ public class ProductController : ControllerBase
                         existingProduct.ProductUrl = dto.ProductUrl;
                         existingProduct.Color = dto.Color;
                         productsToUpdate.Add(existingProduct);
-                        productsToAdd.Add(existingProduct); // 重新上架也算新品通知
+                        productsToNotify.Add(existingProduct); // 重新上架也算新品通知
+                    }
+                    else
+                    {
+                        // 商品已上架，檢查是否有資訊需要更新
+                        bool hasChanges = false;
+
+                        if (existingProduct.Title != dto.Title)
+                        {
+                            existingProduct.Title = dto.Title;
+                            hasChanges = true;
+                        }
+
+                        if (existingProduct.Price != dto.Price)
+                        {
+                            existingProduct.Price = dto.Price;
+                            hasChanges = true;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(dto.ImageUrl) && existingProduct.ImageUrl != dto.ImageUrl)
+                        {
+                            existingProduct.ImageUrl = dto.ImageUrl;
+                            hasChanges = true;
+                        }
+
+                        if (existingProduct.ProductUrl != dto.ProductUrl)
+                        {
+                            existingProduct.ProductUrl = dto.ProductUrl;
+                            hasChanges = true;
+                        }
+
+                        if (existingProduct.Color != dto.Color)
+                        {
+                            existingProduct.Color = dto.Color;
+                            hasChanges = true;
+                        }
+
+                        if (hasChanges)
+                        {
+                            existingProduct.UpdatedAt = DateTime.UtcNow;
+                            productsToUpdate.Add(existingProduct);
+                        }
                     }
                 }
                 else
@@ -81,7 +122,7 @@ public class ProductController : ControllerBase
                         IsAvailable = true
                     };
                     await _context.Products.AddAsync(newProduct);
-                    productsToAdd.Add(newProduct);
+                    productsToNotify.Add(newProduct);
                 }
             }
 
@@ -109,8 +150,8 @@ public class ProductController : ControllerBase
             // 先儲存變更以取得新商品的 Id
             await _context.SaveChangesAsync();
 
-            // 建立上架記錄
-            foreach (var product in productsToAdd)
+            // 建立上架記錄（新商品或重新上架）
+            foreach (var product in productsToNotify)
             {
                 logsToAdd.Add(new ProductLog
                 {
@@ -141,17 +182,17 @@ public class ProductController : ControllerBase
 
             // 發送 LINE 通知（僅針對新增或重新上架的商品）
             var notifiedCount = 0;
-            if (productsToAdd.Any())
+            if (productsToNotify.Any())
             {
-                notifiedCount = await BroadcastLineMessageAsync(productsToAdd);
+                notifiedCount = await BroadcastLineMessageAsync(productsToNotify);
             }
 
             return Ok(new SyncProductsResponse
             {
-                AddedCount = productsToAdd.Count,
+                AddedCount = productsToNotify.Count,
                 DeletedCount = productsToMarkUnavailable.Count,
                 NotifiedCount = notifiedCount,
-                Message = $"同步完成：新增/重新上架 {productsToAdd.Count} 個商品，下架 {productsToMarkUnavailable.Count} 個商品，已通知 {notifiedCount} 個商品"
+                Message = $"同步完成：新增/重新上架 {productsToNotify.Count} 個商品，下架 {productsToMarkUnavailable.Count} 個商品，已通知 {notifiedCount} 個商品"
             });
         }
         catch (Exception ex)
