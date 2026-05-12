@@ -18,6 +18,6 @@ public class User
 
     public User()
     {
-        SubscribedUntil = DateTime.UtcNow.AddDays(7);
+        SubscribedUntil = DateTime.UtcNow.AddDays(30);
     }
 }

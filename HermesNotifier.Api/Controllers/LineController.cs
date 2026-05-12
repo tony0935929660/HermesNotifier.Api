@@ -586,7 +586,7 @@ namespace HermesNotifier.Api.Controllers
                         new
                         {
                             type = "text",
-                            text = "帳號已成功綁定。\n您可享有 7 日試用期，試用結束後如需續用，請聯繫客服。"
+                            text = "帳號已成功綁定。\n您可享有 30 日試用期，試用結束後如需續用，請聯繫客服。"
                         }
                     }
                 };
