@@ -232,7 +232,7 @@ namespace HermesNotifier.Api.Controllers
                     await SendLatestProductsToUserAsync(request.LineId);
 
                     isNewUser = true;
-                    message = "歡迎！已建立帳號<br>您可享有 7 日試用期";
+                    message = "歡迎！已建立帳號<br>您可享有 30 日試用期";
                 }
                 else
                 {
