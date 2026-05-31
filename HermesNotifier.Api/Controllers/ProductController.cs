@@ -118,6 +118,80 @@ public class ProductController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// 更新產品的上架狀態
+    /// </summary>
+    /// <param name="productId">產品 ID</param>
+    /// <param name="request">更新請求</param>
+    /// <returns>更新結果</returns>
+    [HttpPatch("{productId}/availability")]
+    public async Task<ActionResult> UpdateProductAvailability(
+        string productId, 
+        [FromBody] UpdateProductAvailabilityRequest request)
+    {
+        try
+        {
+            var product = await _context.Products
+                .FirstOrDefaultAsync(p => p.ProductId == productId);
+
+            if (product == null)
+            {
+                _logger.LogWarning("找不到產品 ID: {productId}", productId);
+                return NotFound(new { Message = $"找不到產品 ID: {productId}" });
+            }
+
+            // 檢查值是否有改變
+            if (product.IsAvailable == request.IsAvailable)
+            {
+                _logger.LogInformation("產品 {productId} 的 IsAvailable 值未改變，無需更新", productId);
+                return Ok(new 
+                { 
+                    Message = "產品狀態未改變",
+                    ProductId = productId,
+                    IsAvailable = product.IsAvailable,
+                    Changed = false
+                });
+            }
+
+            // 更新值
+            var oldValue = product.IsAvailable;
+            product.IsAvailable = request.IsAvailable;
+            product.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            // 記錄狀態變更
+            var log = new ProductLog
+            {
+                ProductId = product.Id,
+                Action = request.IsAvailable ? "Available" : "Unavailable",
+                LoggedAt = DateTime.UtcNow
+            };
+            await _context.ProductLogs.AddAsync(log);
+            await _context.SaveChangesAsync();
+
+            // 清除產品清單快取
+            await _cacheStore.EvictByTagAsync("products-cache", default);
+            _logger.LogInformation(
+                "已更新產品 {productId} 的 IsAvailable: {oldValue} -> {newValue}，並清除快取", 
+                productId, oldValue, request.IsAvailable);
+
+            return Ok(new 
+            { 
+                Message = "成功更新產品上架狀態",
+                ProductId = productId,
+                IsAvailable = product.IsAvailable,
+                Changed = true,
+                UpdatedAt = product.UpdatedAt
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "更新產品 {productId} 的上架狀態時發生錯誤", productId);
+            return StatusCode(500, new { Message = $"更新失敗：{ex.Message}" });
+        }
+    }
+
     [HttpPost("sync")]
     public async Task<ActionResult<SyncProductsResponse>> SyncProducts([FromBody] SyncProductsRequest request)
     {
