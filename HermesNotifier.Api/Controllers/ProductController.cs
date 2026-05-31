@@ -3,6 +3,7 @@ using HermesNotifier.Api.DTOs.Requests.Products;
 using HermesNotifier.Api.DTOs.Responses.Products;
 using HermesNotifier.Api.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Headers;
 
@@ -15,16 +16,106 @@ public class ProductController : ControllerBase
     private readonly ApplicationDbContext _context;
     private readonly ILogger<ProductController> _logger;
     private readonly IConfiguration _config;
+    private readonly IOutputCacheStore _cacheStore;
     private const string HermesUrl = "https://www.hermes.com/tw/zh/";
 
     public ProductController(
         ApplicationDbContext context,
         ILogger<ProductController> logger,
-        IConfiguration config)
+        IConfiguration config,
+        IOutputCacheStore cacheStore)
     {
         _context = context;
         _logger = logger;
         _config = config;
+        _cacheStore = cacheStore;
+    }
+
+    /// <summary>
+    /// 取得所有產品清單 (帶快取)
+    /// </summary>
+    /// <returns>產品清單</returns>
+    [HttpGet]
+    [OutputCache(PolicyName = "ProductsList")]
+    public async Task<ActionResult<ProductListResponse>> GetAllProducts()
+    {
+        try
+        {
+            var products = await _context.Products
+                .OrderByDescending(p => p.CreatedAt)
+                .ToListAsync();
+
+            var response = new ProductListResponse
+            {
+                TotalCount = products.Count,
+                Products = products.Select(p => new ProductItemDto
+                {
+                    ProductId = p.ProductId,
+                    ProductUrl = p.ProductUrl,
+                    Title = p.Title,
+                    Price = p.Price,
+                    ImageUrl = p.ImageUrl,
+                    Color = p.Color,
+                    IsAvailable = p.IsAvailable,
+                    CreatedAt = p.CreatedAt,
+                    UpdatedAt = p.UpdatedAt
+                }).ToList()
+            };
+
+            _logger.LogInformation("成功取得 {count} 個產品", response.TotalCount);
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "取得產品清單時發生錯誤");
+            return StatusCode(500, new ProductListResponse
+            {
+                TotalCount = 0,
+                Products = new List<ProductItemDto>()
+            });
+        }
+    }
+
+    /// <summary>
+    /// 根據 ProductId 取得單一產品
+    /// </summary>
+    /// <param name="productId">產品 ID</param>
+    /// <returns>產品資訊</returns>
+    [HttpGet("{productId}")]
+    public async Task<ActionResult<ProductItemDto>> GetProductById(string productId)
+    {
+        try
+        {
+            var product = await _context.Products
+                .FirstOrDefaultAsync(p => p.ProductId == productId);
+
+            if (product == null)
+            {
+                _logger.LogWarning("找不到產品 ID: {productId}", productId);
+                return NotFound(new { Message = $"找不到產品 ID: {productId}" });
+            }
+
+            var response = new ProductItemDto
+            {
+                ProductId = product.ProductId,
+                ProductUrl = product.ProductUrl,
+                Title = product.Title,
+                Price = product.Price,
+                ImageUrl = product.ImageUrl,
+                Color = product.Color,
+                IsAvailable = product.IsAvailable,
+                CreatedAt = product.CreatedAt,
+                UpdatedAt = product.UpdatedAt
+            };
+
+            _logger.LogInformation("成功取得產品: {productId}", productId);
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "取得產品時發生錯誤: {productId}", productId);
+            return StatusCode(500, new { Message = $"取得產品失敗：{ex.Message}" });
+        }
     }
 
     [HttpPost("sync")]
@@ -186,6 +277,10 @@ public class ProductController : ControllerBase
             {
                 notifiedCount = await BroadcastLineMessageAsync(productsToNotify);
             }
+
+            // 清除產品快取（因為資料已更新）
+            await _cacheStore.EvictByTagAsync("products-cache", default);
+            _logger.LogInformation("已清除產品快取");
 
             return Ok(new SyncProductsResponse
             {
