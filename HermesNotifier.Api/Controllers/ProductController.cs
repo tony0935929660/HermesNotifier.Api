@@ -119,6 +119,106 @@ public class ProductController : ControllerBase
     }
 
     /// <summary>
+    /// 更新產品資料
+    /// </summary>
+    /// <param name="productId">產品 ID</param>
+    /// <param name="request">更新請求（部分欄位）</param>
+    /// <returns>更新結果</returns>
+    [HttpPatch("{productId}")]
+    public async Task<ActionResult> UpdateProduct(
+        string productId,
+        [FromBody] UpdateProductRequest request)
+    {
+        try
+        {
+            var product = await _context.Products
+                .FirstOrDefaultAsync(p => p.ProductId == productId);
+
+            if (product == null)
+            {
+                _logger.LogWarning("找不到產品 ID: {productId}", productId);
+                return NotFound(new { Message = $"找不到產品 ID: {productId}" });
+            }
+
+            var changed = false;
+
+            if (!string.IsNullOrWhiteSpace(request.Title) && product.Title != request.Title)
+            {
+                product.Title = request.Title;
+                changed = true;
+            }
+
+            if (request.Price.HasValue && product.Price != request.Price.Value)
+            {
+                product.Price = request.Price.Value;
+                changed = true;
+            }
+
+            if (request.ImageUrl is not null && product.ImageUrl != request.ImageUrl)
+            {
+                product.ImageUrl = request.ImageUrl;
+                changed = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.ProductUrl) && product.ProductUrl != request.ProductUrl)
+            {
+                product.ProductUrl = request.ProductUrl;
+                changed = true;
+            }
+
+            if (request.Color is not null && product.Color != request.Color)
+            {
+                product.Color = request.Color;
+                changed = true;
+            }
+
+            if (request.IsAvailable.HasValue && product.IsAvailable != request.IsAvailable.Value)
+            {
+                product.IsAvailable = request.IsAvailable.Value;
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return Ok(new
+                {
+                    Message = "沒有欄位異動",
+                    ProductId = product.ProductId,
+                    Changed = false
+                });
+            }
+
+            product.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            await _cacheStore.EvictByTagAsync("products-cache", default);
+
+            // 更新成功後發送通知；若通知失敗，不影響更新 API 的成功結果
+            try
+            {
+                await BroadcastLineMessageAsync(new List<Product> { product });
+            }
+            catch (Exception notifyEx)
+            {
+                _logger.LogError(notifyEx, "產品更新後發送通知失敗: {productId}", productId);
+            }
+
+            return Ok(new
+            {
+                Message = "產品更新成功",
+                ProductId = product.ProductId,
+                Changed = true,
+                UpdatedAt = product.UpdatedAt
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "更新產品資料失敗: {productId}", productId);
+            return StatusCode(500, new { Message = $"更新失敗：{ex.Message}" });
+        }
+    }
+
+    /// <summary>
     /// 更新產品的上架狀態
     /// </summary>
     /// <param name="productId">產品 ID</param>
