@@ -16,6 +16,7 @@ builder.Services.AddOutputCache(options =>
 {
     options.AddPolicy("ProductsList", builder =>
         builder.Expire(TimeSpan.FromMinutes(30)) // 快取 30 分鐘
+               .SetVaryByQuery("onlyExpired")    // 全清單與「只取快取已過期」清單分開快取，避免互相覆蓋
                .Tag("products-cache"));
 });
 
@@ -25,6 +26,29 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+// 啟動時自動套用 EF Core migrations（部署時自動更新資料庫結構）
+// 用環境變數 AUTO_MIGRATE 控制，預設開啟；若要暫時關閉設為 "false"/"0"
+var autoMigrate = builder.Configuration["AUTO_MIGRATE"];
+if (string.IsNullOrWhiteSpace(autoMigrate)
+    || (autoMigrate != "0"
+        && !autoMigrate.Equals("false", StringComparison.OrdinalIgnoreCase)))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    try
+    {
+        logger.LogInformation("套用資料庫 migrations 中…");
+        db.Database.Migrate();
+        logger.LogInformation("資料庫 migrations 套用完成。");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "套用資料庫 migrations 失敗。");
+        throw; // 結構未更新時讓容器啟動失敗，避免在錯誤 schema 上運行
+    }
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

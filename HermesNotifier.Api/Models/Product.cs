@@ -21,4 +21,13 @@ public class Product
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime? UpdatedAt { get; set; }
+
+    /// <summary>
+    /// 此商品頁 Cloudflare 邊緣快取預計到期時間 (UTC)。
+    /// 由爬蟲依回應 cache-control 的 max-age 與 age 標頭計算後回寫：
+    /// expiresAt = now + (max-age - age)。
+    /// null = 尚未抓取或未知，視為應立即重抓；
+    /// 早於現在 = 快取已過期，重抓才可能取得更新後的資料。
+    /// </summary>
+    public DateTime? CacheExpiresAt { get; set; }
 }

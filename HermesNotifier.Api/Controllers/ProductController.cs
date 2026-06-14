@@ -32,18 +32,35 @@ public class ProductController : ControllerBase
     }
 
     /// <summary>
-    /// 取得所有產品清單 (帶快取)
+    /// 取得所有產品清單 (帶快取)。
+    /// onlyExpired=true 時只回傳「Cloudflare 快取已過期或從未抓取」的商品，
+    /// 供爬蟲排程只重抓「重抓才可能拿到更新資料」的項目，省下重複拿快取副本的流量。
     /// </summary>
+    /// <param name="onlyExpired">是否只回傳快取已過期（含從未抓取）的商品</param>
     /// <returns>產品清單</returns>
     [HttpGet]
     [OutputCache(PolicyName = "ProductsList")]
-    public async Task<ActionResult<ProductListResponse>> GetAllProducts()
+    public async Task<ActionResult<ProductListResponse>> GetAllProducts([FromQuery] bool onlyExpired = false)
     {
         try
         {
-            var products = await _context.Products
-                .OrderByDescending(p => p.CreatedAt)
-                .ToListAsync();
+            var query = _context.Products.AsQueryable();
+
+            if (onlyExpired)
+            {
+                // 只選「快取已過期（CacheExpiresAt <= 現在）或從未抓取（null）」的商品，
+                // 並讓最久未更新（含 null）排在最前面優先重抓。
+                var now = DateTime.UtcNow;
+                query = query
+                    .Where(p => p.CacheExpiresAt == null || p.CacheExpiresAt <= now)
+                    .OrderBy(p => p.CacheExpiresAt);
+            }
+            else
+            {
+                query = query.OrderByDescending(p => p.CreatedAt);
+            }
+
+            var products = await query.ToListAsync();
 
             var response = new ProductListResponse
             {
@@ -58,11 +75,12 @@ public class ProductController : ControllerBase
                     Color = p.Color,
                     IsAvailable = p.IsAvailable,
                     CreatedAt = p.CreatedAt,
-                    UpdatedAt = p.UpdatedAt
+                    UpdatedAt = p.UpdatedAt,
+                    CacheExpiresAt = p.CacheExpiresAt
                 }).ToList()
             };
 
-            _logger.LogInformation("成功取得 {count} 個產品", response.TotalCount);
+            _logger.LogInformation("成功取得 {count} 個產品 (onlyExpired={onlyExpired})", response.TotalCount, onlyExpired);
             return Ok(response);
         }
         catch (Exception ex)
@@ -105,7 +123,8 @@ public class ProductController : ControllerBase
                 Color = product.Color,
                 IsAvailable = product.IsAvailable,
                 CreatedAt = product.CreatedAt,
-                UpdatedAt = product.UpdatedAt
+                UpdatedAt = product.UpdatedAt,
+                CacheExpiresAt = product.CacheExpiresAt
             };
 
             _logger.LogInformation("成功取得產品: {productId}", productId);
@@ -240,12 +259,23 @@ public class ProductController : ControllerBase
                 return NotFound(new { Message = $"找不到產品 ID: {productId}" });
             }
 
-            // 檢查值是否有改變
-            if (product.IsAvailable == request.IsAvailable)
+            // 是否異動上架狀態
+            var availabilityChanged = product.IsAvailable != request.IsAvailable;
+
+            // 無論上架狀態是否改變，只要爬蟲回報了快取到期時間就更新
+            // （供下一輪 GetAllProducts?onlyExpired=true 判斷此商品是否該重抓）。
+            var cacheExpiryChanged = request.CacheExpiresAt.HasValue
+                && product.CacheExpiresAt != request.CacheExpiresAt;
+            if (cacheExpiryChanged)
             {
-                _logger.LogInformation("產品 {productId} 的 IsAvailable 值未改變，無需更新", productId);
-                return Ok(new 
-                { 
+                product.CacheExpiresAt = request.CacheExpiresAt;
+            }
+
+            if (!availabilityChanged && !cacheExpiryChanged)
+            {
+                _logger.LogInformation("產品 {productId} 的上架狀態與快取到期時間皆未改變，無需更新", productId);
+                return Ok(new
+                {
                     Message = "產品狀態未改變",
                     ProductId = productId,
                     IsAvailable = product.IsAvailable,
@@ -255,34 +285,41 @@ public class ProductController : ControllerBase
 
             // 更新值
             var oldValue = product.IsAvailable;
-            product.IsAvailable = request.IsAvailable;
+            if (availabilityChanged)
+            {
+                product.IsAvailable = request.IsAvailable;
+            }
             product.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();
 
-            // 記錄狀態變更
-            var log = new ProductLog
+            // 僅在上架狀態真的改變時才記錄狀態變更
+            if (availabilityChanged)
             {
-                ProductId = product.Id,
-                Action = request.IsAvailable ? "Available" : "Unavailable",
-                LoggedAt = DateTime.UtcNow
-            };
-            await _context.ProductLogs.AddAsync(log);
-            await _context.SaveChangesAsync();
+                var log = new ProductLog
+                {
+                    ProductId = product.Id,
+                    Action = request.IsAvailable ? "Available" : "Unavailable",
+                    LoggedAt = DateTime.UtcNow
+                };
+                await _context.ProductLogs.AddAsync(log);
+                await _context.SaveChangesAsync();
+            }
 
-            // 清除產品清單快取
+            // 清除產品清單快取（含全清單與只取快取已過期清單）
             await _cacheStore.EvictByTagAsync("products-cache", default);
             _logger.LogInformation(
-                "已更新產品 {productId} 的 IsAvailable: {oldValue} -> {newValue}，並清除快取", 
-                productId, oldValue, request.IsAvailable);
+                "已更新產品 {productId} (availabilityChanged={availabilityChanged} {oldValue}->{newValue}, cacheExpiresAt={cacheExpiresAt})，並清除快取",
+                productId, availabilityChanged, oldValue, request.IsAvailable, product.CacheExpiresAt);
 
-            return Ok(new 
-            { 
-                Message = "成功更新產品上架狀態",
+            return Ok(new
+            {
+                Message = "成功更新產品狀態",
                 ProductId = productId,
                 IsAvailable = product.IsAvailable,
                 Changed = true,
-                UpdatedAt = product.UpdatedAt
+                UpdatedAt = product.UpdatedAt,
+                CacheExpiresAt = product.CacheExpiresAt
             });
         }
         catch (Exception ex)

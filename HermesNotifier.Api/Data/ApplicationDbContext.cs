@@ -78,6 +78,9 @@ public class ApplicationDbContext : DbContext
 
             // 建立索引以加速查詢上架中的商品
             entity.HasIndex(e => e.IsAvailable);
+
+            // 建立索引以加速「只查快取已過期、需重新抓取」的商品
+            entity.HasIndex(e => e.CacheExpiresAt);
         });
 
         modelBuilder.Entity<ProductLog>(entity =>

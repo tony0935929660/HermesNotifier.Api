@@ -17,4 +17,9 @@ public class ProductItemDto
     public bool IsAvailable { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
+
+    /// <summary>
+    /// 此商品頁 Cloudflare 邊緣快取預計到期時間 (UTC)；null = 尚未抓取或未知。
+    /// </summary>
+    public DateTime? CacheExpiresAt { get; set; }
 }
