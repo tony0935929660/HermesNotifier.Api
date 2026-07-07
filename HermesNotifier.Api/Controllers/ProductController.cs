@@ -312,6 +312,20 @@ public class ProductController : ControllerBase
                 "已更新產品 {productId} (availabilityChanged={availabilityChanged} {oldValue}->{newValue}, cacheExpiresAt={cacheExpiresAt})，並清除快取",
                 productId, availabilityChanged, oldValue, request.IsAvailable, product.CacheExpiresAt);
 
+            // 補貨通知：僅在「上架狀態真的改變」且「變為可購買（缺貨→有貨）」時發送 LINE，
+            // 讓爬蟲透過 /availability 更新庫存時也能推播補貨快訊（不影響更新 API 的成功結果）。
+            if (availabilityChanged && request.IsAvailable)
+            {
+                try
+                {
+                    await BroadcastLineMessageAsync(new List<Product> { product });
+                }
+                catch (Exception notifyEx)
+                {
+                    _logger.LogError(notifyEx, "補貨通知發送失敗: {productId}", productId);
+                }
+            }
+
             return Ok(new
             {
                 Message = "成功更新產品狀態",
