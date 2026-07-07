@@ -549,14 +549,65 @@ public class ProductController : ControllerBase
     {
         try
         {
-            var existingIds = (await _context.Products.Select(p => p.ProductId).ToListAsync()).ToHashSet();
+            var existingDict = await _context.Products
+                .ToDictionaryAsync(p => p.ProductId, p => p);
             var toAdd = new List<Product>();
+            var updatedCount = 0;
 
             foreach (var dto in request.Products)
             {
-                if (string.IsNullOrWhiteSpace(dto.ProductId) || existingIds.Contains(dto.ProductId))
+                if (string.IsNullOrWhiteSpace(dto.ProductId))
                 {
-                    continue; // 已存在或無效，略過（不對帳、不更新既有）
+                    continue;
+                }
+
+                if (existingDict.TryGetValue(dto.ProductId, out var existing))
+                {
+                    var changed = false;
+
+                    if (!string.IsNullOrWhiteSpace(dto.Title) && existing.Title != dto.Title)
+                    {
+                        existing.Title = dto.Title;
+                        changed = true;
+                    }
+
+                    if (dto.Price > 0 && existing.Price != dto.Price)
+                    {
+                        existing.Price = dto.Price;
+                        changed = true;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(dto.ImageUrl) && existing.ImageUrl != dto.ImageUrl)
+                    {
+                        existing.ImageUrl = dto.ImageUrl;
+                        changed = true;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(dto.ProductUrl) && existing.ProductUrl != dto.ProductUrl)
+                    {
+                        existing.ProductUrl = dto.ProductUrl;
+                        changed = true;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(dto.Color) && existing.Color != dto.Color)
+                    {
+                        existing.Color = dto.Color;
+                        changed = true;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(dto.Category) && existing.Category != dto.Category)
+                    {
+                        existing.Category = dto.Category;
+                        changed = true;
+                    }
+
+                    if (changed)
+                    {
+                        existing.UpdatedAt = DateTime.UtcNow;
+                        updatedCount++;
+                    }
+
+                    continue;
                 }
 
                 var url = !string.IsNullOrWhiteSpace(dto.ProductUrl)
@@ -575,24 +626,28 @@ public class ProductController : ControllerBase
                     IsAvailable = false,   // 先設 false，等監控抓到 InStock 由 /availability 發補貨通知
                     CacheExpiresAt = null  // null → 立即納入 onlyExpired，下一輪就檢查
                 });
-                existingIds.Add(dto.ProductId); // 避免同批重複
+                existingDict[dto.ProductId] = toAdd[^1]; // 避免同批重複
             }
 
-            if (toAdd.Any())
+            if (toAdd.Any() || updatedCount > 0)
             {
-                await _context.Products.AddRangeAsync(toAdd);
+                if (toAdd.Any())
+                {
+                    await _context.Products.AddRangeAsync(toAdd);
+                }
                 await _context.SaveChangesAsync();
                 await _cacheStore.EvictByTagAsync("products-cache", default);
             }
 
-            _logger.LogInformation("Discovery 完成：收到 {received} 個 SKU，新增 {added} 個新商品（不對帳、不通知）",
-                request.Products.Count, toAdd.Count);
+            _logger.LogInformation("Discovery 完成：收到 {received} 個 SKU，新增 {added} 個新商品，更新 {updated} 個既有商品（不對帳、不通知）",
+                request.Products.Count, toAdd.Count, updatedCount);
 
             return Ok(new
             {
-                Message = $"Discovery 完成：新增 {toAdd.Count} 個新商品",
+                Message = $"Discovery 完成：新增 {toAdd.Count} 個新商品，更新 {updatedCount} 個既有商品",
                 ReceivedCount = request.Products.Count,
                 AddedCount = toAdd.Count,
+                UpdatedCount = updatedCount,
                 AddedSkus = toAdd.Select(p => p.ProductId).ToList()
             });
         }
