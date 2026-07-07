@@ -20,4 +20,9 @@ public class ProductDto
     public required string ProductUrl { get; set; }
 
     public string? Color { get; set; }
+
+    /// <summary>
+    /// 商品分類：「包款」或「小皮件」。未提供時後端預設「包款」。
+    /// </summary>
+    public string? Category { get; set; }
 }

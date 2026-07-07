@@ -40,11 +40,19 @@ public class ProductController : ControllerBase
     /// <returns>產品清單</returns>
     [HttpGet]
     [OutputCache(PolicyName = "ProductsList")]
-    public async Task<ActionResult<ProductListResponse>> GetAllProducts([FromQuery] bool onlyExpired = false)
+    public async Task<ActionResult<ProductListResponse>> GetAllProducts(
+        [FromQuery] bool onlyExpired = false,
+        [FromQuery] string? category = null)
     {
         try
         {
             var query = _context.Products.AsQueryable();
+
+            // 依分類篩選（例：category=包款 / 小皮件）；未提供則全部
+            if (!string.IsNullOrWhiteSpace(category))
+            {
+                query = query.Where(p => p.Category == category);
+            }
 
             if (onlyExpired)
             {
@@ -73,6 +81,7 @@ public class ProductController : ControllerBase
                     Price = p.Price,
                     ImageUrl = p.ImageUrl,
                     Color = p.Color,
+                    Category = p.Category,
                     IsAvailable = p.IsAvailable,
                     CreatedAt = p.CreatedAt,
                     UpdatedAt = p.UpdatedAt,
@@ -80,7 +89,7 @@ public class ProductController : ControllerBase
                 }).ToList()
             };
 
-            _logger.LogInformation("成功取得 {count} 個產品 (onlyExpired={onlyExpired})", response.TotalCount, onlyExpired);
+            _logger.LogInformation("成功取得 {count} 個產品 (onlyExpired={onlyExpired}, category={category})", response.TotalCount, onlyExpired, category ?? "(全部)");
             return Ok(response);
         }
         catch (Exception ex)
@@ -379,6 +388,10 @@ public class ProductController : ControllerBase
 
                         existingProduct.ProductUrl = dto.ProductUrl;
                         existingProduct.Color = dto.Color;
+                        if (!string.IsNullOrWhiteSpace(dto.Category))
+                        {
+                            existingProduct.Category = dto.Category;
+                        }
                         productsToUpdate.Add(existingProduct);
                         productsToNotify.Add(existingProduct); // 重新上架也算新品通知
                     }
@@ -435,6 +448,7 @@ public class ProductController : ControllerBase
                         ImageUrl = dto.ImageUrl,
                         ProductUrl = dto.ProductUrl,
                         Color = dto.Color,
+                        Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
                         IsAvailable = true
                     };
                     await _context.Products.AddAsync(newProduct);
@@ -522,6 +536,70 @@ public class ProductController : ControllerBase
             {
                 Message = $"同步失敗：{ex.Message}"
             });
+        }
+    }
+
+    /// <summary>
+    /// Discovery：接收分類頁掃描到的 SKU，只「新增」資料庫沒有的商品（upsert）。
+    /// 與 /sync 不同：不做全量對帳（不會把清單外商品標記下架）、不發送 LINE 通知。
+    /// 新商品以 IsAvailable=false 入庫，之後由每輪庫存監控（/availability）抓到 InStock 時才發補貨通知。
+    /// </summary>
+    [HttpPost("discover")]
+    public async Task<ActionResult> DiscoverProducts([FromBody] DiscoverProductsRequest request)
+    {
+        try
+        {
+            var existingIds = (await _context.Products.Select(p => p.ProductId).ToListAsync()).ToHashSet();
+            var toAdd = new List<Product>();
+
+            foreach (var dto in request.Products)
+            {
+                if (string.IsNullOrWhiteSpace(dto.ProductId) || existingIds.Contains(dto.ProductId))
+                {
+                    continue; // 已存在或無效，略過（不對帳、不更新既有）
+                }
+
+                var url = !string.IsNullOrWhiteSpace(dto.ProductUrl)
+                    ? dto.ProductUrl
+                    : $"https://www.hermes.com/tw/zh/product/{dto.ProductId}/";
+
+                toAdd.Add(new Product
+                {
+                    ProductId = dto.ProductId,
+                    Title = string.IsNullOrWhiteSpace(dto.Title) ? dto.ProductId : dto.Title,
+                    Price = dto.Price,
+                    ImageUrl = dto.ImageUrl,
+                    ProductUrl = url,
+                    Color = dto.Color,
+                    Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
+                    IsAvailable = false,   // 先設 false，等監控抓到 InStock 由 /availability 發補貨通知
+                    CacheExpiresAt = null  // null → 立即納入 onlyExpired，下一輪就檢查
+                });
+                existingIds.Add(dto.ProductId); // 避免同批重複
+            }
+
+            if (toAdd.Any())
+            {
+                await _context.Products.AddRangeAsync(toAdd);
+                await _context.SaveChangesAsync();
+                await _cacheStore.EvictByTagAsync("products-cache", default);
+            }
+
+            _logger.LogInformation("Discovery 完成：收到 {received} 個 SKU，新增 {added} 個新商品（不對帳、不通知）",
+                request.Products.Count, toAdd.Count);
+
+            return Ok(new
+            {
+                Message = $"Discovery 完成：新增 {toAdd.Count} 個新商品",
+                ReceivedCount = request.Products.Count,
+                AddedCount = toAdd.Count,
+                AddedSkus = toAdd.Select(p => p.ProductId).ToList()
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Discovery 處理時發生錯誤");
+            return StatusCode(500, new { Message = $"Discovery 失敗：{ex.Message}" });
         }
     }
 

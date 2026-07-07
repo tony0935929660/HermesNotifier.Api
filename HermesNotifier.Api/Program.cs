@@ -16,7 +16,7 @@ builder.Services.AddOutputCache(options =>
 {
     options.AddPolicy("ProductsList", builder =>
         builder.Expire(TimeSpan.FromMinutes(30)) // 快取 30 分鐘
-               .SetVaryByQuery("onlyExpired")    // 全清單與「只取快取已過期」清單分開快取，避免互相覆蓋
+               .SetVaryByQuery("onlyExpired", "category") // 依 onlyExpired 與 category 分開快取，避免互相覆蓋
                .Tag("products-cache"));
 });
 

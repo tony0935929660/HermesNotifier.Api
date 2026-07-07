@@ -16,6 +16,12 @@ public class Product
 
     public string? Color { get; set; }
 
+    /// <summary>
+    /// 商品分類：「包款」或「小皮件」。既有資料預設「包款」。
+    /// 由 discovery 掃描分類頁時標記，供前端分群顯示與篩選。
+    /// </summary>
+    public string Category { get; set; } = "包款";
+
     public bool IsAvailable { get; set; } = true;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
