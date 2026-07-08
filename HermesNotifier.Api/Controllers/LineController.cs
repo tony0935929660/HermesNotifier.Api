@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using HermesNotifier.Api.DTOs.Responses.Lines;
 using HermesNotifier.Api.Data;
+using HermesNotifier.Api.Infrastructure;
 using HermesNotifier.Api.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -217,7 +218,7 @@ namespace HermesNotifier.Api.Controllers
                     {
                         LineId = request.LineId,
                         Name = request.DisplayName,
-                        LastLoginAt = DateTime.UtcNow
+                        LastLoginAt = TaiwanTime.Now
                     };
 
                     _context.Users.Add(newUser);
@@ -237,7 +238,7 @@ namespace HermesNotifier.Api.Controllers
                 else
                 {
                     // 更新最後登入時間
-                    existingUser.LastLoginAt = DateTime.UtcNow;
+                    existingUser.LastLoginAt = TaiwanTime.Now;
                     existingUser.Name = request.DisplayName;
                     await _context.SaveChangesAsync();
 
@@ -370,7 +371,7 @@ namespace HermesNotifier.Api.Controllers
                 {
                     LineId = lineUserId,
                     Name = displayName,
-                    LastLoginAt = DateTime.UtcNow
+                    LastLoginAt = TaiwanTime.Now
                 };
 
                 _context.Users.Add(newUser);
@@ -386,7 +387,7 @@ namespace HermesNotifier.Api.Controllers
             else
             {
                 // 更新最後登入時間
-                existingUser.LastLoginAt = DateTime.UtcNow;
+                existingUser.LastLoginAt = TaiwanTime.Now;
                 existingUser.Name = displayName; // 更新名稱（以防使用者改名）
                 await _context.SaveChangesAsync();
 

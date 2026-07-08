@@ -1,6 +1,7 @@
 using HermesNotifier.Api.Data;
 using HermesNotifier.Api.DTOs.Requests.Products;
 using HermesNotifier.Api.DTOs.Responses.Products;
+using HermesNotifier.Api.Infrastructure;
 using HermesNotifier.Api.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.OutputCaching;
@@ -61,7 +62,7 @@ public class ProductController : ControllerBase
             {
                 // 只選「快取已過期（CacheExpiresAt <= 現在）或從未抓取（null）」的商品，
                 // 並讓最久未更新（含 null）排在最前面優先重抓。
-                var now = DateTime.UtcNow;
+                var now = TaiwanTime.Now;
                 query = query
                     .Where(p => p.CacheExpiresAt == null || p.CacheExpiresAt <= now)
                     .OrderBy(p => p.CacheExpiresAt);
@@ -236,7 +237,7 @@ public class ProductController : ControllerBase
                 });
             }
 
-            product.UpdatedAt = DateTime.UtcNow;
+            product.UpdatedAt = TaiwanTime.Now;
             await _context.SaveChangesAsync();
 
             await _cacheStore.EvictByTagAsync("products-cache", default);
@@ -294,11 +295,12 @@ public class ProductController : ControllerBase
 
             // 無論上架狀態是否改變，只要爬蟲回報了快取到期時間就更新
             // （供下一輪 GetAllProducts?onlyExpired=true 判斷此商品是否該重抓）。
-            var cacheExpiryChanged = request.CacheExpiresAt.HasValue
-                && product.CacheExpiresAt != request.CacheExpiresAt;
+            var incomingCacheExpiry = TaiwanTime.ToTaiwan(request.CacheExpiresAt);
+            var cacheExpiryChanged = incomingCacheExpiry.HasValue
+                && product.CacheExpiresAt != incomingCacheExpiry;
             if (cacheExpiryChanged)
             {
-                product.CacheExpiresAt = request.CacheExpiresAt;
+                product.CacheExpiresAt = incomingCacheExpiry;
             }
 
             if (!statusChanged && !availabilityChanged && !cacheExpiryChanged)
@@ -322,7 +324,7 @@ public class ProductController : ControllerBase
                 product.AvailabilityStatus = resolvedStatus;
                 product.IsAvailable = resolvedIsAvailable;
             }
-            product.UpdatedAt = DateTime.UtcNow;
+            product.UpdatedAt = TaiwanTime.Now;
 
             await _context.SaveChangesAsync();
 
@@ -333,7 +335,7 @@ public class ProductController : ControllerBase
                 {
                     ProductId = product.Id,
                     Action = GetProductLogAction(resolvedStatus),
-                    LoggedAt = DateTime.UtcNow
+                    LoggedAt = TaiwanTime.Now
                 };
                 await _context.ProductLogs.AddAsync(log);
                 await _context.SaveChangesAsync();
@@ -402,7 +404,7 @@ public class ProductController : ControllerBase
                         // 商品重新上架
                         existingProduct.IsAvailable = true;
                         existingProduct.AvailabilityStatus = StatusInStock;
-                        existingProduct.UpdatedAt = DateTime.UtcNow;
+                        existingProduct.UpdatedAt = TaiwanTime.Now;
                         existingProduct.Title = dto.Title;
                         existingProduct.Price = dto.Price;
 
@@ -458,7 +460,7 @@ public class ProductController : ControllerBase
 
                         if (hasChanges)
                         {
-                            existingProduct.UpdatedAt = DateTime.UtcNow;
+                            existingProduct.UpdatedAt = TaiwanTime.Now;
                             productsToUpdate.Add(existingProduct);
                         }
                     }
@@ -490,7 +492,7 @@ public class ProductController : ControllerBase
                 {
                     existingProduct.IsAvailable = false;
                     existingProduct.AvailabilityStatus = StatusOutOfStock;
-                    existingProduct.UpdatedAt = DateTime.UtcNow;
+                    existingProduct.UpdatedAt = TaiwanTime.Now;
                     productsToMarkUnavailable.Add(existingProduct);
                 }
             }
@@ -515,7 +517,7 @@ public class ProductController : ControllerBase
                 {
                     ProductId = product.Id,
                     Action = "Available",
-                    LoggedAt = DateTime.UtcNow
+                    LoggedAt = TaiwanTime.Now
                 });
             }
 
@@ -526,7 +528,7 @@ public class ProductController : ControllerBase
                 {
                     ProductId = product.Id,
                     Action = "Unavailable",
-                    LoggedAt = DateTime.UtcNow
+                    LoggedAt = TaiwanTime.Now
                 });
             }
 
@@ -627,7 +629,7 @@ public class ProductController : ControllerBase
 
                     if (changed)
                     {
-                        existing.UpdatedAt = DateTime.UtcNow;
+                        existing.UpdatedAt = TaiwanTime.Now;
                         updatedCount++;
                     }
 
@@ -794,7 +796,7 @@ public class ProductController : ControllerBase
         try
         {
             // 取得訂閱未過期的使用者
-            var now = DateTime.UtcNow;
+            var now = TaiwanTime.Now;
             var activeSubscribers = await _context.Users
                 .Where(u => u.SubscribedUntil.HasValue && u.SubscribedUntil.Value > now)
                 .ToListAsync();

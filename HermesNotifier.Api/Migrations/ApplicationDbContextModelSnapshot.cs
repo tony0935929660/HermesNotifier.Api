@@ -51,7 +51,7 @@ namespace HermesNotifier.Api.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2")
-                        .HasDefaultValueSql("GETUTCDATE()");
+                        .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
 
                     b.Property<string>("ImageUrl")
                         .HasMaxLength(500)
@@ -114,7 +114,7 @@ namespace HermesNotifier.Api.Migrations
                     b.Property<DateTime>("LoggedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2")
-                        .HasDefaultValueSql("GETUTCDATE()");
+                        .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
 
                     b.Property<int>("ProductId")
                         .HasColumnType("int");
@@ -141,7 +141,7 @@ namespace HermesNotifier.Api.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2")
-                        .HasDefaultValueSql("GETUTCDATE()");
+                        .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
 
                     b.Property<DateTime?>("LastLoginAt")
                         .HasColumnType("datetime2");
@@ -158,7 +158,7 @@ namespace HermesNotifier.Api.Migrations
                     b.Property<DateTime?>("SubscribedUntil")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2")
-                        .HasDefaultValueSql("DATEADD(YEAR, 1, GETUTCDATE())");
+                        .HasDefaultValueSql("DATEADD(YEAR, 1, DATEADD(HOUR, 8, GETUTCDATE()))");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");

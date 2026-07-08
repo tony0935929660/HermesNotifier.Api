@@ -35,10 +35,10 @@ public class ApplicationDbContext : DbContext
                 .HasMaxLength(100);
 
             entity.Property(e => e.CreatedAt)
-                .HasDefaultValueSql("GETUTCDATE()");
+                .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
 
             entity.Property(e => e.SubscribedUntil)
-                .HasDefaultValueSql("DATEADD(YEAR, 1, GETUTCDATE())");
+                .HasDefaultValueSql("DATEADD(YEAR, 1, DATEADD(HOUR, 8, GETUTCDATE()))");
         });
 
         modelBuilder.Entity<Product>(entity =>
@@ -79,7 +79,7 @@ public class ApplicationDbContext : DbContext
                 .HasDefaultValue("InStock");
 
             entity.Property(e => e.CreatedAt)
-                .HasDefaultValueSql("GETUTCDATE()");
+                .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
 
             // 建立索引以加速查詢上架中的商品
             entity.HasIndex(e => e.IsAvailable);
@@ -103,7 +103,7 @@ public class ApplicationDbContext : DbContext
                 .HasMaxLength(20);
 
             entity.Property(e => e.LoggedAt)
-                .HasDefaultValueSql("GETUTCDATE()");
+                .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
 
             // 建立外鍵關聯
             entity.HasOne(e => e.Product)

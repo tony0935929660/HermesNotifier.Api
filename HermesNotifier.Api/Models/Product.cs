@@ -1,3 +1,5 @@
+using HermesNotifier.Api.Infrastructure;
+
 namespace HermesNotifier.Api.Models;
 
 public class Product
@@ -30,12 +32,12 @@ public class Product
     /// </summary>
     public string AvailabilityStatus { get; set; } = "InStock";
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; } = TaiwanTime.Now;
 
     public DateTime? UpdatedAt { get; set; }
 
     /// <summary>
-    /// 此商品頁 Cloudflare 邊緣快取預計到期時間 (UTC)。
+    /// 此商品頁 Cloudflare 邊緣快取預計到期時間（以台灣時間儲存）。
     /// 由爬蟲依回應 cache-control 的 max-age 與 age 標頭計算後回寫：
     /// expiresAt = now + (max-age - age)。
     /// null = 尚未抓取或未知，視為應立即重抓；

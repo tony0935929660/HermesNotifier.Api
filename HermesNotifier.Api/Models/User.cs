@@ -1,3 +1,5 @@
+using HermesNotifier.Api.Infrastructure;
+
 namespace HermesNotifier.Api.Models;
 
 public class User
@@ -8,7 +10,7 @@ public class User
 
     public string? Name { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; } = TaiwanTime.Now;
 
     public DateTime? UpdatedAt { get; set; }
 
@@ -18,6 +20,6 @@ public class User
 
     public User()
     {
-        SubscribedUntil = DateTime.UtcNow.AddDays(30);
+        SubscribedUntil = TaiwanTime.Now.AddDays(30);
     }
 }

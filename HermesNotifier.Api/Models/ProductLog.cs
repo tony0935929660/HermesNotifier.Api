@@ -1,3 +1,5 @@
+using HermesNotifier.Api.Infrastructure;
+
 namespace HermesNotifier.Api.Models;
 
 public class ProductLog
@@ -17,7 +19,7 @@ public class ProductLog
     /// <summary>
     /// 記錄時間
     /// </summary>
-    public DateTime LoggedAt { get; set; } = DateTime.UtcNow;
+    public DateTime LoggedAt { get; set; } = TaiwanTime.Now;
 
     /// <summary>
     /// 導航屬性
