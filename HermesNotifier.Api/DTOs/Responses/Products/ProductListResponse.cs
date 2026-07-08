@@ -16,6 +16,7 @@ public class ProductItemDto
     public string? Color { get; set; }
     public string Category { get; set; } = "包款";
     public bool IsAvailable { get; set; }
+    public string AvailabilityStatus { get; set; } = "InStock";
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 

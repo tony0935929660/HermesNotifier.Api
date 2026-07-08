@@ -24,6 +24,12 @@ public class Product
 
     public bool IsAvailable { get; set; } = true;
 
+    /// <summary>
+    /// 庫存三態：InStock / OutOfStock / NotFound。
+    /// 舊欄位 IsAvailable 仍保留供既有客戶端相容：InStock=true，其餘=false。
+    /// </summary>
+    public string AvailabilityStatus { get; set; } = "InStock";
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime? UpdatedAt { get; set; }

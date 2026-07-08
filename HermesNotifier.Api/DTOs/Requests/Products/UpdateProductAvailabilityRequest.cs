@@ -4,8 +4,16 @@ namespace HermesNotifier.Api.DTOs.Requests.Products;
 
 public class UpdateProductAvailabilityRequest
 {
-    [Required(ErrorMessage = "IsAvailable 不能為空")]
-    public required bool IsAvailable { get; set; }
+    /// <summary>
+    /// 舊版相容欄位：true=InStock，false=OutOfStock。
+    /// 若有提供 AvailabilityStatus，兩者必須一致。
+    /// </summary>
+    public bool? IsAvailable { get; set; }
+
+    /// <summary>
+    /// 新版三態欄位：InStock / OutOfStock / NotFound（接受 true/false/404 別名）。
+    /// </summary>
+    public string? AvailabilityStatus { get; set; }
 
     /// <summary>
     /// 選填：爬蟲依回應 cache-control max-age 與 age 算出的「此商品頁 Cloudflare 快取到期時間 (UTC)」。

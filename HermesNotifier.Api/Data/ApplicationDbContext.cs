@@ -73,11 +73,19 @@ public class ApplicationDbContext : DbContext
                 .IsRequired()
                 .HasDefaultValue(true);
 
+            entity.Property(e => e.AvailabilityStatus)
+                .IsRequired()
+                .HasMaxLength(20)
+                .HasDefaultValue("InStock");
+
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("GETUTCDATE()");
 
             // 建立索引以加速查詢上架中的商品
             entity.HasIndex(e => e.IsAvailable);
+
+            // 建立索引以加速三態查詢（InStock/OutOfStock/NotFound）
+            entity.HasIndex(e => e.AvailabilityStatus);
 
             // 建立索引以加速「只查快取已過期、需重新抓取」的商品
             entity.HasIndex(e => e.CacheExpiresAt);

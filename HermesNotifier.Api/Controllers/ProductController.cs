@@ -18,6 +18,9 @@ public class ProductController : ControllerBase
     private readonly IConfiguration _config;
     private readonly IOutputCacheStore _cacheStore;
     private const string HermesUrl = "https://www.hermes.com/tw/zh/";
+    private const string StatusInStock = "InStock";
+    private const string StatusOutOfStock = "OutOfStock";
+    private const string StatusNotFound = "NotFound";
 
     public ProductController(
         ApplicationDbContext context,
@@ -83,6 +86,7 @@ public class ProductController : ControllerBase
                     Color = p.Color,
                     Category = p.Category,
                     IsAvailable = p.IsAvailable,
+                    AvailabilityStatus = p.AvailabilityStatus,
                     CreatedAt = p.CreatedAt,
                     UpdatedAt = p.UpdatedAt,
                     CacheExpiresAt = p.CacheExpiresAt
@@ -130,7 +134,9 @@ public class ProductController : ControllerBase
                 Price = product.Price,
                 ImageUrl = product.ImageUrl,
                 Color = product.Color,
+                Category = product.Category,
                 IsAvailable = product.IsAvailable,
+                AvailabilityStatus = product.AvailabilityStatus,
                 CreatedAt = product.CreatedAt,
                 UpdatedAt = product.UpdatedAt,
                 CacheExpiresAt = product.CacheExpiresAt
@@ -200,10 +206,24 @@ public class ProductController : ControllerBase
                 changed = true;
             }
 
-            if (request.IsAvailable.HasValue && product.IsAvailable != request.IsAvailable.Value)
+            if (request.IsAvailable.HasValue || !string.IsNullOrWhiteSpace(request.AvailabilityStatus))
             {
-                product.IsAvailable = request.IsAvailable.Value;
-                changed = true;
+                if (!TryResolveAvailabilityState(
+                        request.AvailabilityStatus,
+                        request.IsAvailable,
+                        out var resolvedStatus,
+                        out var resolvedIsAvailable,
+                        out var errorMessage))
+                {
+                    return BadRequest(new { Message = errorMessage });
+                }
+
+                if (product.AvailabilityStatus != resolvedStatus || product.IsAvailable != resolvedIsAvailable)
+                {
+                    product.AvailabilityStatus = resolvedStatus;
+                    product.IsAvailable = resolvedIsAvailable;
+                    changed = true;
+                }
             }
 
             if (!changed)
@@ -220,16 +240,6 @@ public class ProductController : ControllerBase
             await _context.SaveChangesAsync();
 
             await _cacheStore.EvictByTagAsync("products-cache", default);
-
-            // 更新成功後發送通知；若通知失敗，不影響更新 API 的成功結果
-            try
-            {
-                await BroadcastLineMessageAsync(new List<Product> { product });
-            }
-            catch (Exception notifyEx)
-            {
-                _logger.LogError(notifyEx, "產品更新後發送通知失敗: {productId}", productId);
-            }
 
             return Ok(new
             {
@@ -268,8 +278,19 @@ public class ProductController : ControllerBase
                 return NotFound(new { Message = $"找不到產品 ID: {productId}" });
             }
 
-            // 是否異動上架狀態
-            var availabilityChanged = product.IsAvailable != request.IsAvailable;
+            if (!TryResolveAvailabilityState(
+                    request.AvailabilityStatus,
+                    request.IsAvailable,
+                    out var resolvedStatus,
+                    out var resolvedIsAvailable,
+                    out var errorMessage))
+            {
+                return BadRequest(new { Message = errorMessage });
+            }
+
+            // 是否異動庫存狀態（相容舊 bool + 新三態）
+            var statusChanged = product.AvailabilityStatus != resolvedStatus;
+            var availabilityChanged = product.IsAvailable != resolvedIsAvailable;
 
             // 無論上架狀態是否改變，只要爬蟲回報了快取到期時間就更新
             // （供下一輪 GetAllProducts?onlyExpired=true 判斷此商品是否該重抓）。
@@ -280,35 +301,38 @@ public class ProductController : ControllerBase
                 product.CacheExpiresAt = request.CacheExpiresAt;
             }
 
-            if (!availabilityChanged && !cacheExpiryChanged)
+            if (!statusChanged && !availabilityChanged && !cacheExpiryChanged)
             {
-                _logger.LogInformation("產品 {productId} 的上架狀態與快取到期時間皆未改變，無需更新", productId);
+                _logger.LogInformation("產品 {productId} 的庫存狀態與快取到期時間皆未改變，無需更新", productId);
                 return Ok(new
                 {
                     Message = "產品狀態未改變",
                     ProductId = productId,
                     IsAvailable = product.IsAvailable,
+                    AvailabilityStatus = product.AvailabilityStatus,
                     Changed = false
                 });
             }
 
             // 更新值
+            var oldStatus = product.AvailabilityStatus;
             var oldValue = product.IsAvailable;
-            if (availabilityChanged)
+            if (statusChanged || availabilityChanged)
             {
-                product.IsAvailable = request.IsAvailable;
+                product.AvailabilityStatus = resolvedStatus;
+                product.IsAvailable = resolvedIsAvailable;
             }
             product.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();
 
-            // 僅在上架狀態真的改變時才記錄狀態變更
-            if (availabilityChanged)
+            // 僅在狀態真的改變時才記錄狀態變更
+            if (statusChanged || availabilityChanged)
             {
                 var log = new ProductLog
                 {
                     ProductId = product.Id,
-                    Action = request.IsAvailable ? "Available" : "Unavailable",
+                    Action = GetProductLogAction(resolvedStatus),
                     LoggedAt = DateTime.UtcNow
                 };
                 await _context.ProductLogs.AddAsync(log);
@@ -318,12 +342,12 @@ public class ProductController : ControllerBase
             // 清除產品清單快取（含全清單與只取快取已過期清單）
             await _cacheStore.EvictByTagAsync("products-cache", default);
             _logger.LogInformation(
-                "已更新產品 {productId} (availabilityChanged={availabilityChanged} {oldValue}->{newValue}, cacheExpiresAt={cacheExpiresAt})，並清除快取",
-                productId, availabilityChanged, oldValue, request.IsAvailable, product.CacheExpiresAt);
+                "已更新產品 {productId} (statusChanged={statusChanged} {oldStatus}->{newStatus}, availabilityChanged={availabilityChanged} {oldValue}->{newValue}, cacheExpiresAt={cacheExpiresAt})，並清除快取",
+                productId, statusChanged, oldStatus, resolvedStatus, availabilityChanged, oldValue, resolvedIsAvailable, product.CacheExpiresAt);
 
-            // 補貨通知：僅在「上架狀態真的改變」且「變為可購買（缺貨→有貨）」時發送 LINE，
+            // 補貨通知：僅在「狀態真的改變」且「變為可購買（缺貨/404→有貨）」時發送 LINE，
             // 讓爬蟲透過 /availability 更新庫存時也能推播補貨快訊（不影響更新 API 的成功結果）。
-            if (availabilityChanged && request.IsAvailable)
+            if (statusChanged && resolvedStatus == StatusInStock)
             {
                 try
                 {
@@ -340,6 +364,7 @@ public class ProductController : ControllerBase
                 Message = "成功更新產品狀態",
                 ProductId = productId,
                 IsAvailable = product.IsAvailable,
+                AvailabilityStatus = product.AvailabilityStatus,
                 Changed = true,
                 UpdatedAt = product.UpdatedAt,
                 CacheExpiresAt = product.CacheExpiresAt
@@ -376,6 +401,7 @@ public class ProductController : ControllerBase
                     {
                         // 商品重新上架
                         existingProduct.IsAvailable = true;
+                        existingProduct.AvailabilityStatus = StatusInStock;
                         existingProduct.UpdatedAt = DateTime.UtcNow;
                         existingProduct.Title = dto.Title;
                         existingProduct.Price = dto.Price;
@@ -449,7 +475,8 @@ public class ProductController : ControllerBase
                         ProductUrl = dto.ProductUrl,
                         Color = dto.Color,
                         Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
-                        IsAvailable = true
+                        IsAvailable = true,
+                        AvailabilityStatus = StatusInStock
                     };
                     await _context.Products.AddAsync(newProduct);
                     productsToNotify.Add(newProduct);
@@ -462,6 +489,7 @@ public class ProductController : ControllerBase
                 if (existingProduct.IsAvailable && !incomingProductIds.Contains(existingProduct.ProductId))
                 {
                     existingProduct.IsAvailable = false;
+                    existingProduct.AvailabilityStatus = StatusOutOfStock;
                     existingProduct.UpdatedAt = DateTime.UtcNow;
                     productsToMarkUnavailable.Add(existingProduct);
                 }
@@ -510,12 +538,8 @@ public class ProductController : ControllerBase
                 _logger.LogInformation("已記錄 {count} 筆商品狀態變更", logsToAdd.Count);
             }
 
-            // 發送 LINE 通知（僅針對新增或重新上架的商品）
+            // 依需求：/sync 不發送 LINE 通知，通知只保留在 /{productId}/availability 且變為 InStock。
             var notifiedCount = 0;
-            if (productsToNotify.Any())
-            {
-                notifiedCount = await BroadcastLineMessageAsync(productsToNotify);
-            }
 
             // 清除產品快取（因為資料已更新）
             await _cacheStore.EvictByTagAsync("products-cache", default);
@@ -526,7 +550,7 @@ public class ProductController : ControllerBase
                 AddedCount = productsToNotify.Count,
                 DeletedCount = productsToMarkUnavailable.Count,
                 NotifiedCount = notifiedCount,
-                Message = $"同步完成：新增/重新上架 {productsToNotify.Count} 個商品，下架 {productsToMarkUnavailable.Count} 個商品，已通知 {notifiedCount} 個商品"
+                Message = $"同步完成：新增/重新上架 {productsToNotify.Count} 個商品，下架 {productsToMarkUnavailable.Count} 個商品（/sync 不發通知）"
             });
         }
         catch (Exception ex)
@@ -624,6 +648,7 @@ public class ProductController : ControllerBase
                     Color = dto.Color,
                     Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
                     IsAvailable = false,   // 先設 false，等監控抓到 InStock 由 /availability 發補貨通知
+                    AvailabilityStatus = StatusOutOfStock,
                     CacheExpiresAt = null  // null → 立即納入 onlyExpired，下一輪就檢查
                 });
                 existingDict[dto.ProductId] = toAdd[^1]; // 避免同批重複
@@ -655,6 +680,105 @@ public class ProductController : ControllerBase
         {
             _logger.LogError(ex, "Discovery 處理時發生錯誤");
             return StatusCode(500, new { Message = $"Discovery 失敗：{ex.Message}" });
+        }
+    }
+
+    private static string GetProductLogAction(string status)
+    {
+        return status switch
+        {
+            StatusInStock => "Available",
+            StatusOutOfStock => "Unavailable",
+            StatusNotFound => "NotFound",
+            _ => "Unavailable"
+        };
+    }
+
+    private static bool TryResolveAvailabilityState(
+        string? availabilityStatus,
+        bool? isAvailable,
+        out string resolvedStatus,
+        out bool resolvedIsAvailable,
+        out string errorMessage)
+    {
+        resolvedStatus = StatusOutOfStock;
+        resolvedIsAvailable = false;
+        errorMessage = string.Empty;
+
+        var hasStatus = !string.IsNullOrWhiteSpace(availabilityStatus);
+        var hasBool = isAvailable.HasValue;
+
+        if (!hasStatus && !hasBool)
+        {
+            errorMessage = "請至少提供 isAvailable 或 availabilityStatus。";
+            return false;
+        }
+
+        var statusOk = true;
+        var statusFromText = string.Empty;
+        var boolFromText = false;
+
+        if (hasStatus)
+        {
+            statusOk = TryNormalizeAvailabilityStatus(availabilityStatus!, out statusFromText, out boolFromText);
+            if (!statusOk)
+            {
+                errorMessage = "availabilityStatus 僅支援 InStock/OutOfStock/NotFound（或 true/false/404）。";
+                return false;
+            }
+        }
+
+        if (hasStatus && hasBool && boolFromText != isAvailable!.Value)
+        {
+            errorMessage = "isAvailable 與 availabilityStatus 不一致。";
+            return false;
+        }
+
+        if (hasStatus)
+        {
+            resolvedStatus = statusFromText;
+            resolvedIsAvailable = boolFromText;
+            return true;
+        }
+
+        resolvedStatus = isAvailable!.Value ? StatusInStock : StatusOutOfStock;
+        resolvedIsAvailable = isAvailable.Value;
+        return true;
+    }
+
+    private static bool TryNormalizeAvailabilityStatus(string input, out string status, out bool isAvailable)
+    {
+        status = StatusOutOfStock;
+        isAvailable = false;
+
+        var normalized = input.Trim().ToLowerInvariant();
+        switch (normalized)
+        {
+            case "instock":
+            case "in_stock":
+            case "available":
+            case "true":
+                status = StatusInStock;
+                isAvailable = true;
+                return true;
+
+            case "outofstock":
+            case "out_of_stock":
+            case "unavailable":
+            case "false":
+                status = StatusOutOfStock;
+                isAvailable = false;
+                return true;
+
+            case "notfound":
+            case "not_found":
+            case "404":
+                status = StatusNotFound;
+                isAvailable = false;
+                return true;
+
+            default:
+                return false;
         }
     }
 

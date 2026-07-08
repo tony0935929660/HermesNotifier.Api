@@ -10,7 +10,7 @@ public class ProductLog
     public int ProductId { get; set; }
 
     /// <summary>
-    /// 操作類型：Available (上架) / Unavailable (下架)
+    /// 操作類型：Available (上架) / Unavailable (缺貨) / NotFound (404 下架)
     /// </summary>
     public required string Action { get; set; }
 

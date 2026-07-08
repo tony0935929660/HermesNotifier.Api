@@ -13,4 +13,6 @@ public class UpdateProductRequest
     public string? Color { get; set; }
 
     public bool? IsAvailable { get; set; }
+
+    public string? AvailabilityStatus { get; set; }
 }
