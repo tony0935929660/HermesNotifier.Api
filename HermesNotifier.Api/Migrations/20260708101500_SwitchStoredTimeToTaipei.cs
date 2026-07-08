@@ -5,8 +5,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace HermesNotifier.Api.Migrations;
 
-[Migration("20260708101500_SwitchStoredTimeToTaipei")]
-public class SwitchStoredTimeToTaipei : Migration
+public partial class SwitchStoredTimeToTaipei : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)
     {
