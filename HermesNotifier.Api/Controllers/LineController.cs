@@ -572,8 +572,8 @@ namespace HermesNotifier.Api.Controllers
         {
             try
             {
-                var channelAccessToken = _config["Line:ChannelAccessToken"]
-                    ?? throw new InvalidOperationException("Line:ChannelAccessToken is missing");
+                var channelAccessToken = _config.GetLineChannelAccessToken()
+                    ?? throw new InvalidOperationException("Line:ChannelAccessToken / LINE_BOT_CHANNEL_ACCESS_TOKEN is missing");
 
                 using var client = new HttpClient();
                 client.DefaultRequestHeaders.Authorization = 
@@ -615,8 +615,8 @@ namespace HermesNotifier.Api.Controllers
         {
             try
             {
-                var channelAccessToken = _config["Line:ChannelAccessToken"]
-                    ?? throw new InvalidOperationException("Line:ChannelAccessToken is missing");
+                var channelAccessToken = _config.GetLineChannelAccessToken()
+                    ?? throw new InvalidOperationException("Line:ChannelAccessToken / LINE_BOT_CHANNEL_ACCESS_TOKEN is missing");
 
                 using var client = new HttpClient();
                 client.DefaultRequestHeaders.Authorization = 
@@ -658,8 +658,8 @@ namespace HermesNotifier.Api.Controllers
         {
             try
             {
-                var channelAccessToken = _config["Line:ChannelAccessToken"]
-                    ?? throw new InvalidOperationException("Line:ChannelAccessToken is missing");
+                var channelAccessToken = _config.GetLineChannelAccessToken()
+                    ?? throw new InvalidOperationException("Line:ChannelAccessToken / LINE_BOT_CHANNEL_ACCESS_TOKEN is missing");
 
                 // 獲取最新一批上架的商品（通過最新的 Available log）
                 var latestAvailableLog = await _context.ProductLogs

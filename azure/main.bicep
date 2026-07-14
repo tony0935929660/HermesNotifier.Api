@@ -98,7 +98,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
 			  value: lineCallbackUrl
 			}
 			{
-			  name: 'LINE_BOT_CHANNEL_ACCESS_TOKEN'
+			  name: 'Line__ChannelAccessToken'
 			  secretRef: 'line-bot-token'
 			}
 			{

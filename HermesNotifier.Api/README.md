@@ -14,6 +14,8 @@
 - **CallbackUrl**: Your OAuth callback URL (e.g., `https://yourdomain.com/api/line/callback`)
 - **LiffId**: Your LIFF App ID from LINE Developers Console (LIFF tab, format: `1234567890-abcdefgh`)
 
+For production environment variables, use `Line__ChannelAccessToken`. The app also accepts the legacy `LINE_BOT_CHANNEL_ACCESS_TOKEN` key for backward compatibility.
+
 ### Example
 
 ```json

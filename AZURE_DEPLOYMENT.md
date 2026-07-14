@@ -11,8 +11,8 @@
 ### LINE 設定
 - `Line__ChannelId` = `2008323822`
 - `Line__ChannelSecret` = `你的ChannelSecret`
+- `Line__ChannelAccessToken` = `你的LINE Bot Token`
 - `Line__CallbackUrl` = `https://你的Azure網址/api/line/callback`
-- `LINE_BOT_CHANNEL_ACCESS_TOKEN` = `你的LINE Bot Token`
 
 ### 資料庫設定
 - `ConnectionStrings__DefaultConnection` = `你的Azure SQL連線字串`
@@ -55,6 +55,7 @@ az containerapp create \
 	"ASPNETCORE_URLS=http://+:8080" \
 	"Line__ChannelId=2008323822" \
 	"Line__ChannelSecret=secretref:line-channel-secret" \
+  "Line__ChannelAccessToken=secretref:line-bot-token" \
 	"Line__CallbackUrl=https://你的網址/api/line/callback" \
   --secrets \
 	"line-channel-secret=你的ChannelSecret" \
