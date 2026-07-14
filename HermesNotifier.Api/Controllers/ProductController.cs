@@ -14,6 +14,8 @@ namespace HermesNotifier.Api.Controllers;
 [ApiController]
 public class ProductController : ControllerBase
 {
+    private sealed record LineBroadcastResult(int AttemptedUsers, int SuccessUsers, int FailedUsers, int SuccessBatches);
+
     private readonly ApplicationDbContext _context;
     private readonly ILogger<ProductController> _logger;
     private readonly IConfiguration _config;
@@ -349,15 +351,24 @@ public class ProductController : ControllerBase
 
             // 補貨通知：僅在「狀態真的改變」且「變為可購買（缺貨/404→有貨）」時發送 LINE，
             // 讓爬蟲透過 /availability 更新庫存時也能推播補貨快訊（不影響更新 API 的成功結果）。
+            LineBroadcastResult? lineNotification = null;
             if (statusChanged && resolvedStatus == StatusInStock)
             {
                 try
                 {
-                    await BroadcastLineMessageAsync(new List<Product> { product });
+                    lineNotification = await BroadcastLineMessageAsync(new List<Product> { product });
+                    _logger.LogInformation(
+                        "補貨通知結果 {productId}: attemptedUsers={attemptedUsers}, successUsers={successUsers}, failedUsers={failedUsers}, successBatches={successBatches}",
+                        productId,
+                        lineNotification.AttemptedUsers,
+                        lineNotification.SuccessUsers,
+                        lineNotification.FailedUsers,
+                        lineNotification.SuccessBatches);
                 }
                 catch (Exception notifyEx)
                 {
                     _logger.LogError(notifyEx, "補貨通知發送失敗: {productId}", productId);
+                    lineNotification = new LineBroadcastResult(0, 0, 0, 0);
                 }
             }
 
@@ -369,7 +380,16 @@ public class ProductController : ControllerBase
                 AvailabilityStatus = product.AvailabilityStatus,
                 Changed = true,
                 UpdatedAt = product.UpdatedAt,
-                CacheExpiresAt = product.CacheExpiresAt
+                CacheExpiresAt = product.CacheExpiresAt,
+                Notification = lineNotification is null
+                    ? null
+                    : new
+                    {
+                        AttemptedUsers = lineNotification.AttemptedUsers,
+                        SuccessUsers = lineNotification.SuccessUsers,
+                        FailedUsers = lineNotification.FailedUsers,
+                        SuccessBatches = lineNotification.SuccessBatches
+                    }
             });
         }
         catch (Exception ex)
@@ -784,13 +804,13 @@ public class ProductController : ControllerBase
         }
     }
 
-    private async Task<int> BroadcastLineMessageAsync(List<Product> products)
+    private async Task<LineBroadcastResult> BroadcastLineMessageAsync(List<Product> products)
     {
         var token = _config.GetLineChannelAccessToken();
         if (string.IsNullOrWhiteSpace(token))
         {
             _logger.LogWarning("Line:ChannelAccessToken / LINE_BOT_CHANNEL_ACCESS_TOKEN 未設定，無法使用 LINE Messaging API 廣播。");
-            return 0;
+            return new LineBroadcastResult(0, 0, 0, 0);
         }
 
         try
@@ -804,7 +824,7 @@ public class ProductController : ControllerBase
             if (!activeSubscribers.Any())
             {
                 _logger.LogInformation("沒有訂閱中的使用者，跳過通知發送");
-                return 0;
+                return new LineBroadcastResult(0, 0, 0, 0);
             }
 
             _logger.LogInformation("找到 {count} 個訂閱中的使用者", activeSubscribers.Count);
@@ -813,7 +833,10 @@ public class ProductController : ControllerBase
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-            var sentProductCount = 0;
+            var attemptedUsers = activeSubscribers.Count;
+            var successUsers = 0;
+            var failedUsers = 0;
+            var successBatches = 0;
             var productBatches = products.Chunk(12).ToArray();
 
             for (var batchIndex = 0; batchIndex < productBatches.Length; batchIndex++)
@@ -923,38 +946,41 @@ public class ProductController : ControllerBase
 
                     var response = await client.PostAsJsonAsync("https://api.line.me/v2/bot/message/multicast", payload);
                     var responseBody = await response.Content.ReadAsStringAsync();
+                    var userCount = userBatch.Count();
 
                     if (response.IsSuccessStatusCode)
                     {
-                        sentProductCount += batch.Length;
+                        successUsers += userCount;
+                        successBatches += 1;
                         _logger.LogInformation(
                             "LINE multicast 成功 (batch={batchIndex}/{batchCount}, products={productCount}, users={userCount})：{body}",
                             batchIndex + 1,
                             productBatches.Length,
                             batch.Length,
-                            userBatch.Count(),
+                            userCount,
                             responseBody);
                     }
                     else
                     {
+                        failedUsers += userCount;
                         _logger.LogError(
                             "LINE multicast 失敗 (batch={batchIndex}/{batchCount}, products={productCount}, users={userCount}, status={status})：{body}",
                             batchIndex + 1,
                             productBatches.Length,
                             batch.Length,
-                            userBatch.Count(),
+                            userCount,
                             response.StatusCode,
                             responseBody);
                     }
                 }
             }
 
-            return sentProductCount;
+            return new LineBroadcastResult(attemptedUsers, successUsers, failedUsers, successBatches);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "LINE multicast 發送失敗");
-            return 0;
+            return new LineBroadcastResult(0, 0, 0, 0);
         }
     }
 }
