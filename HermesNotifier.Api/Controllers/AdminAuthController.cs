@@ -26,20 +26,48 @@ public class AdminAuthController : ControllerBase
     }
 
     [AllowAnonymous]
+    [HttpGet("line/authorize-url")]
+    public IActionResult GetLineAuthorizeUrl([FromQuery] string redirectUri)
+    {
+        var lineChannelId = _configuration["Line:ChannelId"];
+        if (string.IsNullOrWhiteSpace(lineChannelId))
+        {
+            return StatusCode(500, new { Message = "伺服器 LINE 設定不完整。" });
+        }
+
+        if (string.IsNullOrWhiteSpace(redirectUri)
+            || !Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            return BadRequest(new { Message = "redirectUri 格式錯誤。" });
+        }
+
+        var state = Guid.NewGuid().ToString("N");
+        var authorizeUrl =
+            $"https://access.line.me/oauth2/v2.1/authorize?response_type=code&client_id={Uri.EscapeDataString(lineChannelId)}&redirect_uri={Uri.EscapeDataString(redirectUri)}&state={Uri.EscapeDataString(state)}&scope=profile%20openid";
+
+        return Ok(new
+        {
+            AuthorizeUrl = authorizeUrl,
+            State = state
+        });
+    }
+
+    [AllowAnonymous]
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] AdminLoginRequest request)
     {
         var idToken = request.IdToken?.Trim();
-
-        if (string.IsNullOrWhiteSpace(idToken))
-        {
-            return BadRequest(new { Message = "請提供 LINE id_token。" });
-        }
+        var code = request.Code?.Trim();
+        var redirectUri = request.RedirectUri?.Trim();
 
         var lineChannelId = _configuration["Line:ChannelId"];
+        var lineChannelSecret = _configuration["Line:ChannelSecret"];
         var jwtSecret = _configuration["ADMIN_JWT_SECRET"];
 
-        if (string.IsNullOrWhiteSpace(lineChannelId) || string.IsNullOrWhiteSpace(jwtSecret))
+        if (string.IsNullOrWhiteSpace(lineChannelId)
+            || string.IsNullOrWhiteSpace(lineChannelSecret)
+            || string.IsNullOrWhiteSpace(jwtSecret))
         {
             return StatusCode(500, new { Message = "伺服器管理員驗證設定不完整。" });
         }
@@ -48,33 +76,105 @@ public class AdminAuthController : ControllerBase
         string? displayName;
         using (var httpClient = new HttpClient())
         {
-            var form = new Dictionary<string, string>
+            if (!string.IsNullOrWhiteSpace(code))
             {
-                { "id_token", idToken },
-                { "client_id", lineChannelId }
-            };
+                if (string.IsNullOrWhiteSpace(redirectUri))
+                {
+                    return BadRequest(new { Message = "請提供 RedirectUri。" });
+                }
 
-            var verifyResponse = await httpClient.PostAsync(
-                "https://api.line.me/oauth2/v2.1/verify",
-                new FormUrlEncodedContent(form));
+                var tokenForm = new Dictionary<string, string>
+                {
+                    { "grant_type", "authorization_code" },
+                    { "code", code },
+                    { "redirect_uri", redirectUri },
+                    { "client_id", lineChannelId },
+                    { "client_secret", lineChannelSecret }
+                };
 
-            if (!verifyResponse.IsSuccessStatusCode)
-            {
-                return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                var tokenResponse = await httpClient.PostAsync(
+                    "https://api.line.me/oauth2/v2.1/token",
+                    new FormUrlEncodedContent(tokenForm));
+
+                if (!tokenResponse.IsSuccessStatusCode)
+                {
+                    return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                }
+
+                var tokenBody = await tokenResponse.Content.ReadAsStringAsync();
+                string? lineAccessToken;
+                try
+                {
+                    using var tokenDoc = JsonDocument.Parse(tokenBody);
+                    lineAccessToken = tokenDoc.RootElement.GetProperty("access_token").GetString();
+                }
+                catch
+                {
+                    return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                }
+
+                if (string.IsNullOrWhiteSpace(lineAccessToken))
+                {
+                    return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                }
+
+                httpClient.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", lineAccessToken);
+
+                var profileResponse = await httpClient.GetAsync("https://api.line.me/v2/profile");
+                if (!profileResponse.IsSuccessStatusCode)
+                {
+                    return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                }
+
+                var profileBody = await profileResponse.Content.ReadAsStringAsync();
+                try
+                {
+                    using var profileDoc = JsonDocument.Parse(profileBody);
+                    lineId = profileDoc.RootElement.GetProperty("userId").GetString();
+                    displayName = profileDoc.RootElement.TryGetProperty("displayName", out var displayNameProp)
+                        ? displayNameProp.GetString()
+                        : null;
+                }
+                catch
+                {
+                    return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                }
             }
+            else if (!string.IsNullOrWhiteSpace(idToken))
+            {
+                var form = new Dictionary<string, string>
+                {
+                    { "id_token", idToken },
+                    { "client_id", lineChannelId }
+                };
 
-            var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
-            try
-            {
-                using var doc = JsonDocument.Parse(verifyBody);
-                lineId = doc.RootElement.GetProperty("sub").GetString();
-                displayName = doc.RootElement.TryGetProperty("name", out var nameProp)
-                    ? nameProp.GetString()
-                    : null;
+                var verifyResponse = await httpClient.PostAsync(
+                    "https://api.line.me/oauth2/v2.1/verify",
+                    new FormUrlEncodedContent(form));
+
+                if (!verifyResponse.IsSuccessStatusCode)
+                {
+                    return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                }
+
+                var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
+                try
+                {
+                    using var doc = JsonDocument.Parse(verifyBody);
+                    lineId = doc.RootElement.GetProperty("sub").GetString();
+                    displayName = doc.RootElement.TryGetProperty("name", out var nameProp)
+                        ? nameProp.GetString()
+                        : null;
+                }
+                catch
+                {
+                    return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                }
             }
-            catch
+            else
             {
-                return Unauthorized(new { Message = "LINE 登入驗證失敗。" });
+                return BadRequest(new { Message = "請提供 Code 或 IdToken。" });
             }
         }
 
