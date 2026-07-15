@@ -8,6 +8,8 @@ public class User
 
     public required string LineId { get; set; }
 
+    public bool IsAdmin { get; set; } = false;
+
     public string? Name { get; set; }
 
     public DateTime CreatedAt { get; set; } = TaiwanTime.Now;

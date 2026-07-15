@@ -34,11 +34,17 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.Name)
                 .HasMaxLength(100);
 
+            entity.Property(e => e.IsAdmin)
+                .IsRequired()
+                .HasDefaultValue(false);
+
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
 
             entity.Property(e => e.SubscribedUntil)
                 .HasDefaultValueSql("DATEADD(YEAR, 1, DATEADD(HOUR, 8, GETUTCDATE()))");
+
+            entity.HasIndex(e => e.IsAdmin);
         });
 
         modelBuilder.Entity<Product>(entity =>

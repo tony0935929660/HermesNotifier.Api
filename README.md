@@ -97,6 +97,8 @@ HermesNotifier.Api/
 ### 商品管理
 
 - `POST /api/products/sync` - 同步商品資料
+- `GET /api/admin/products` - 管理員查詢商品（可依分類、關鍵字、狀態篩選）
+- `GET /api/admin/logs` - 管理員查詢 LOG（可依關鍵字篩選，回傳每商品最新狀態）
 
 ## 🗄️ 資料模型
 

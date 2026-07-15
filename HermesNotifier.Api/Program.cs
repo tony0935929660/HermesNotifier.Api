@@ -1,5 +1,10 @@
+using System.Text;
+using HermesNotifier.Api.Auth;
 using HermesNotifier.Api.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,6 +24,45 @@ builder.Services.AddOutputCache(options =>
                .SetVaryByQuery("onlyExpired", "category") // 依 onlyExpired 與 category 分開快取，避免互相覆蓋
                .Tag("products-cache"));
 });
+
+var adminJwtSecret = builder.Configuration["ADMIN_JWT_SECRET"];
+if (string.IsNullOrWhiteSpace(adminJwtSecret))
+{
+    if (builder.Environment.IsDevelopment())
+    {
+        adminJwtSecret = "dev-only-admin-jwt-secret-please-change";
+        builder.Logging.AddConsole();
+    }
+    else
+    {
+        throw new InvalidOperationException("缺少 ADMIN_JWT_SECRET 設定，無法啟用管理員驗證。");
+    }
+}
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(adminJwtSecret)),
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+    });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.Requirements.Add(new AdminUserRequirement());
+    });
+});
+builder.Services.AddScoped<IAuthorizationHandler, AdminUserRequirementHandler>();
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -62,6 +106,7 @@ app.UseHttpsRedirection();
 // 啟用 Output Cache middleware
 app.UseOutputCache();
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
