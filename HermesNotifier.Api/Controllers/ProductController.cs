@@ -4,7 +4,6 @@ using HermesNotifier.Api.DTOs.Responses.Products;
 using HermesNotifier.Api.Infrastructure;
 using HermesNotifier.Api.Models;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Headers;
 
@@ -19,7 +18,6 @@ public class ProductController : ControllerBase
     private readonly ApplicationDbContext _context;
     private readonly ILogger<ProductController> _logger;
     private readonly IConfiguration _config;
-    private readonly IOutputCacheStore _cacheStore;
     private const string HermesUrl = "https://www.hermes.com/tw/zh/";
     private const string StatusInStock = "InStock";
     private const string StatusOutOfStock = "OutOfStock";
@@ -28,13 +26,11 @@ public class ProductController : ControllerBase
     public ProductController(
         ApplicationDbContext context,
         ILogger<ProductController> logger,
-        IConfiguration config,
-        IOutputCacheStore cacheStore)
+        IConfiguration config)
     {
         _context = context;
         _logger = logger;
         _config = config;
-        _cacheStore = cacheStore;
     }
 
     /// <summary>
@@ -45,7 +41,6 @@ public class ProductController : ControllerBase
     /// <param name="onlyExpired">是否只回傳快取已過期（含從未抓取）的商品</param>
     /// <returns>產品清單</returns>
     [HttpGet]
-    [OutputCache(PolicyName = "ProductsList")]
     public async Task<ActionResult<ProductListResponse>> GetAllProducts(
         [FromQuery] bool onlyExpired = false,
         [FromQuery] string? category = null)
@@ -242,8 +237,6 @@ public class ProductController : ControllerBase
             product.UpdatedAt = TaiwanTime.Now;
             await _context.SaveChangesAsync();
 
-            await _cacheStore.EvictByTagAsync("products-cache", default);
-
             return Ok(new
             {
                 Message = "產品更新成功",
@@ -343,10 +336,8 @@ public class ProductController : ControllerBase
                 await _context.SaveChangesAsync();
             }
 
-            // 清除產品清單快取（含全清單與只取快取已過期清單）
-            await _cacheStore.EvictByTagAsync("products-cache", default);
             _logger.LogInformation(
-                "已更新產品 {productId} (statusChanged={statusChanged} {oldStatus}->{newStatus}, availabilityChanged={availabilityChanged} {oldValue}->{newValue}, cacheExpiresAt={cacheExpiresAt})，並清除快取",
+                "已更新產品 {productId} (statusChanged={statusChanged} {oldStatus}->{newStatus}, availabilityChanged={availabilityChanged} {oldValue}->{newValue}, cacheExpiresAt={cacheExpiresAt})",
                 productId, statusChanged, oldStatus, resolvedStatus, availabilityChanged, oldValue, resolvedIsAvailable, product.CacheExpiresAt);
 
             // 補貨通知：僅在「狀態真的改變」且「變為可購買（缺貨/404→有貨）」時發送 LINE，
@@ -563,10 +554,6 @@ public class ProductController : ControllerBase
             // 依需求：/sync 不發送 LINE 通知，通知只保留在 /{productId}/availability 且變為 InStock。
             var notifiedCount = 0;
 
-            // 清除產品快取（因為資料已更新）
-            await _cacheStore.EvictByTagAsync("products-cache", default);
-            _logger.LogInformation("已清除產品快取");
-
             return Ok(new SyncProductsResponse
             {
                 AddedCount = productsToNotify.Count,
@@ -683,7 +670,6 @@ public class ProductController : ControllerBase
                     await _context.Products.AddRangeAsync(toAdd);
                 }
                 await _context.SaveChangesAsync();
-                await _cacheStore.EvictByTagAsync("products-cache", default);
             }
 
             _logger.LogInformation("Discovery 完成：收到 {received} 個 SKU，新增 {added} 個新商品，更新 {updated} 個既有商品（不對帳、不通知）",

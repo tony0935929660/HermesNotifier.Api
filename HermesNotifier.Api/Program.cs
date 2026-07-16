@@ -16,15 +16,6 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
 
-// Add Output Caching (僅用於 products list)
-builder.Services.AddOutputCache(options =>
-{
-    options.AddPolicy("ProductsList", builder =>
-        builder.Expire(TimeSpan.FromMinutes(30)) // 快取 30 分鐘
-               .SetVaryByQuery("onlyExpired", "category") // 依 onlyExpired 與 category 分開快取，避免互相覆蓋
-               .Tag("products-cache"));
-});
-
 var adminJwtSecret = builder.Configuration["ADMIN_JWT_SECRET"];
 if (string.IsNullOrWhiteSpace(adminJwtSecret))
 {
@@ -102,9 +93,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
-// 啟用 Output Cache middleware
-app.UseOutputCache();
 
 app.UseAuthentication();
 app.UseAuthorization();
