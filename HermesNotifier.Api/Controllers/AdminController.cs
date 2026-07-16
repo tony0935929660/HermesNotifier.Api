@@ -154,6 +154,55 @@ public class AdminController : ControllerBase
         });
     }
 
+    [HttpGet("availability-logs")]
+    public async Task<ActionResult<AdminAvailabilityLogQueryResponse>> QueryAvailabilityLogs([FromQuery] AdminAvailabilityLogQueryRequest request)
+    {
+        var logs = _context.ProductLogs
+            .AsNoTracking()
+            .Join(
+                _context.Products.AsNoTracking(),
+                log => log.ProductId,
+                product => product.Id,
+                (log, product) => new
+                {
+                    product.ProductId,
+                    product.Title,
+                    log.Action,
+                    log.LoggedAt
+                });
+
+        var keyword = request.Keyword?.Trim();
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            logs = logs.Where(item => item.Title.Contains(keyword) || item.ProductId.Contains(keyword));
+        }
+
+        var page = NormalizePage(request.Page);
+        var pageSize = NormalizePageSize(request.PageSize);
+
+        var totalCount = await logs.CountAsync();
+        var items = await logs
+            .OrderByDescending(item => item.LoggedAt)
+            .ThenByDescending(item => item.ProductId)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(item => new AdminAvailabilityLogItemDto
+            {
+                ProductId = item.ProductId,
+                Name = item.Title,
+                Action = item.Action,
+                Status = ConvertLogActionToStatus(item.Action),
+                LoggedAt = item.LoggedAt
+            })
+            .ToListAsync();
+
+        return Ok(new AdminAvailabilityLogQueryResponse
+        {
+            TotalCount = totalCount,
+            Items = items
+        });
+    }
+
     [HttpGet("product-history")]
     public async Task<ActionResult<AdminProductHistoryQueryResponse>> QueryProductHistory([FromQuery] AdminProductHistoryQueryRequest request)
     {
@@ -197,6 +246,7 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("users")]
+    [HttpGet("members")]
     public async Task<ActionResult<AdminUserQueryResponse>> QueryUsers([FromQuery] AdminUserQueryRequest request)
     {
         var query = _context.Users.AsNoTracking().AsQueryable();

@@ -51,6 +51,26 @@ public class AdminUserItemDto
     public DateTime? SubscribedUntil { get; set; }
 }
 
+public class AdminAvailabilityLogQueryResponse
+{
+    public int TotalCount { get; set; }
+
+    public List<AdminAvailabilityLogItemDto> Items { get; set; } = new();
+}
+
+public class AdminAvailabilityLogItemDto
+{
+    public required string ProductId { get; set; }
+
+    public required string Name { get; set; }
+
+    public required string Action { get; set; }
+
+    public required string Status { get; set; }
+
+    public DateTime LoggedAt { get; set; }
+}
+
 public class AdminLogItemDto
 {
     public required string ProductId { get; set; }
