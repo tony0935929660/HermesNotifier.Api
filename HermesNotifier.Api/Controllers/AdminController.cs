@@ -64,8 +64,14 @@ public class AdminController : ControllerBase
             query = query.Where(p => p.AvailabilityStatus == status);
         }
 
+        var totalCount = await query.CountAsync();
+        var page = NormalizePage(request.Page);
+        var pageSize = NormalizePageSize(request.PageSize);
+
         var items = await query
             .OrderByDescending(p => p.UpdatedAt ?? p.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(p => new AdminProductItemDto
             {
                 ProductId = p.ProductId,
@@ -87,7 +93,7 @@ public class AdminController : ControllerBase
 
         return Ok(new AdminProductQueryResponse
         {
-            TotalCount = items.Count,
+            TotalCount = totalCount,
             Items = items
         });
     }
@@ -107,7 +113,10 @@ public class AdminController : ControllerBase
             products = products.Where(p => p.Title.Contains(keyword) || p.ProductId.Contains(keyword));
         }
 
-        var items = await products
+        var page = NormalizePage(request.Page);
+        var pageSize = NormalizePageSize(request.PageSize);
+
+        var query = products
             .Select(p => new
             {
                 p.ProductId,
@@ -120,7 +129,13 @@ public class AdminController : ControllerBase
                     .FirstOrDefault()
             })
             .Where(x => x.LatestLog != null)
-            .OrderByDescending(x => x.LatestLog!.LoggedAt)
+            .OrderByDescending(x => x.LatestLog!.LoggedAt);
+
+        var totalCount = await query.CountAsync();
+
+        var items = await query
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(x => new AdminLogItemDto
             {
                 ProductId = x.ProductId,
@@ -134,7 +149,89 @@ public class AdminController : ControllerBase
 
         return Ok(new AdminLogQueryResponse
         {
+            TotalCount = totalCount,
+            Items = items
+        });
+    }
+
+    [HttpGet("product-history")]
+    public async Task<ActionResult<AdminProductHistoryQueryResponse>> QueryProductHistory([FromQuery] AdminProductHistoryQueryRequest request)
+    {
+        var productId = request.ProductId?.Trim();
+        if (string.IsNullOrWhiteSpace(productId))
+        {
+            return BadRequest(new { Message = "請提供 productId。" });
+        }
+
+        var product = await _context.Products
+            .AsNoTracking()
+            .Where(p => p.ProductId == productId)
+            .Select(p => new { p.Id, p.ProductId, p.Title })
+            .FirstOrDefaultAsync();
+
+        if (product is null)
+        {
+            return NotFound(new { Message = $"找不到產品 ID: {productId}" });
+        }
+
+        var items = await _context.ProductLogs
+            .AsNoTracking()
+            .Where(log => log.ProductId == product.Id)
+            .OrderByDescending(log => log.LoggedAt)
+            .ThenByDescending(log => log.Id)
+            .Select(log => new AdminProductHistoryItemDto
+            {
+                Action = log.Action,
+                Status = ConvertLogActionToStatus(log.Action),
+                LoggedAt = log.LoggedAt
+            })
+            .ToListAsync();
+
+        return Ok(new AdminProductHistoryQueryResponse
+        {
+            ProductId = product.ProductId,
+            ProductName = product.Title,
             TotalCount = items.Count,
+            Items = items
+        });
+    }
+
+    [HttpGet("users")]
+    public async Task<ActionResult<AdminUserQueryResponse>> QueryUsers([FromQuery] AdminUserQueryRequest request)
+    {
+        var query = _context.Users.AsNoTracking().AsQueryable();
+        var keyword = request.Keyword?.Trim();
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            query = query.Where(user => (user.Name != null && user.Name.Contains(keyword)) || user.LineId.Contains(keyword));
+        }
+
+        var page = NormalizePage(request.Page);
+        var pageSize = NormalizePageSize(request.PageSize);
+
+        var totalCount = await query.CountAsync();
+        var items = await query
+            .OrderByDescending(user => user.IsAdmin)
+            .ThenByDescending(user => user.SubscribedUntil)
+            .ThenByDescending(user => user.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(user => new AdminUserItemDto
+            {
+                LineId = user.LineId,
+                Name = user.Name,
+                IsAdmin = user.IsAdmin,
+                CreatedAt = user.CreatedAt,
+                UpdatedAt = user.UpdatedAt,
+                LastLoginAt = user.LastLoginAt,
+                SubscribedUntil = user.SubscribedUntil
+            })
+            .ToListAsync();
+
+        return Ok(new AdminUserQueryResponse
+        {
+            TotalCount = totalCount,
             Items = items
         });
     }
@@ -148,6 +245,21 @@ public class AdminController : ControllerBase
             "notfound" => StatusNotFound,
             _ => StatusOutOfStock
         };
+    }
+
+    private static int NormalizePage(int page)
+    {
+        return page < 1 ? 1 : page;
+    }
+
+    private static int NormalizePageSize(int pageSize)
+    {
+        if (pageSize < 1)
+        {
+            return 10;
+        }
+
+        return pageSize > 100 ? 100 : pageSize;
     }
 
     private static bool TryNormalizeCategory(string? input, out string? normalized, out string errorMessage)

@@ -1,9 +1,9 @@
 namespace HermesNotifier.Api.DTOs.Requests.Admin;
 
-public class AdminLogQueryRequest
+public class AdminUserQueryRequest
 {
     /// <summary>
-    /// 關鍵字（比對商品名稱、產品 ID）。
+    /// 關鍵字（比對名稱、LineId）。
     /// </summary>
     public string? Keyword { get; set; }
 
