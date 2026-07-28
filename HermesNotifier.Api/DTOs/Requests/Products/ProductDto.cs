@@ -25,4 +25,9 @@ public class ProductDto
     /// 商品分類：「包款」或「小皮件」。未提供時後端預設「包款」。
     /// </summary>
     public string? Category { get; set; }
+
+    /// <summary>
+    /// 商品優先級：A/B/C/D/E。未提供時後端預設 C。
+    /// </summary>
+    public string? Level { get; set; }
 }

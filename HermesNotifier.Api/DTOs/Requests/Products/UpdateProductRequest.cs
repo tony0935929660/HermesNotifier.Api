@@ -12,6 +12,11 @@ public class UpdateProductRequest
 
     public string? Color { get; set; }
 
+    /// <summary>
+    /// 商品優先級：A/B/C/D/E。
+    /// </summary>
+    public string? Level { get; set; }
+
     public bool? IsAvailable { get; set; }
 
     public string? AvailabilityStatus { get; set; }

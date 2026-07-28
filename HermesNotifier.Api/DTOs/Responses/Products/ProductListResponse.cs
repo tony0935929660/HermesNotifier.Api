@@ -15,6 +15,7 @@ public class ProductItemDto
     public string? ImageUrl { get; set; }
     public string? Color { get; set; }
     public string Category { get; set; } = "包款";
+    public string Level { get; set; } = "C";
     public bool IsAvailable { get; set; }
     public string AvailabilityStatus { get; set; } = "InStock";
     public DateTime CreatedAt { get; set; }

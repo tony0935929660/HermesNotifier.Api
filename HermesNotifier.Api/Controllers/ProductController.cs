@@ -22,6 +22,11 @@ public class ProductController : ControllerBase
     private const string StatusInStock = "InStock";
     private const string StatusOutOfStock = "OutOfStock";
     private const string StatusNotFound = "NotFound";
+    private const string LevelA = "A";
+    private const string LevelB = "B";
+    private const string LevelC = "C";
+    private const string LevelD = "D";
+    private const string LevelE = "E";
 
     public ProductController(
         ApplicationDbContext context,
@@ -62,11 +67,20 @@ public class ProductController : ControllerBase
                 var now = TaiwanTime.Now;
                 query = query
                     .Where(p => p.CacheExpiresAt == null || p.CacheExpiresAt <= now)
-                    .OrderBy(p => p.CacheExpiresAt);
+                    .OrderBy(p => p.Level == LevelA ? 0 :
+                                  p.Level == LevelB ? 1 :
+                                  p.Level == LevelC ? 2 :
+                                  p.Level == LevelD ? 3 : 4)
+                    .ThenBy(p => p.CacheExpiresAt);
             }
             else
             {
-                query = query.OrderByDescending(p => p.CreatedAt);
+                query = query
+                    .OrderBy(p => p.Level == LevelA ? 0 :
+                                  p.Level == LevelB ? 1 :
+                                  p.Level == LevelC ? 2 :
+                                  p.Level == LevelD ? 3 : 4)
+                    .ThenByDescending(p => p.CreatedAt);
             }
 
             var products = await query.ToListAsync();
@@ -83,6 +97,7 @@ public class ProductController : ControllerBase
                     ImageUrl = p.ImageUrl,
                     Color = p.Color,
                     Category = p.Category,
+                    Level = p.Level,
                     IsAvailable = p.IsAvailable,
                     AvailabilityStatus = p.AvailabilityStatus,
                     CreatedAt = p.CreatedAt,
@@ -133,6 +148,7 @@ public class ProductController : ControllerBase
                 ImageUrl = product.ImageUrl,
                 Color = product.Color,
                 Category = product.Category,
+                Level = product.Level,
                 IsAvailable = product.IsAvailable,
                 AvailabilityStatus = product.AvailabilityStatus,
                 CreatedAt = product.CreatedAt,
@@ -202,6 +218,20 @@ public class ProductController : ControllerBase
             {
                 product.Color = request.Color;
                 changed = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.Level))
+            {
+                if (!TryNormalizeLevel(request.Level, out var normalizedLevelForPatch))
+                {
+                    return BadRequest(new { Message = "level 僅支援 A/B/C/D/E。" });
+                }
+
+                if (product.Level != normalizedLevelForPatch)
+                {
+                    product.Level = normalizedLevelForPatch;
+                    changed = true;
+                }
             }
 
             if (request.IsAvailable.HasValue || !string.IsNullOrWhiteSpace(request.AvailabilityStatus))
@@ -431,6 +461,12 @@ public class ProductController : ControllerBase
                         {
                             existingProduct.Category = dto.Category;
                         }
+                        if (!string.IsNullOrWhiteSpace(dto.Level)
+                            && TryNormalizeLevel(dto.Level, out var normalizedLevelForReopen)
+                            && existingProduct.Level != normalizedLevelForReopen)
+                        {
+                            existingProduct.Level = normalizedLevelForReopen;
+                        }
                         productsToUpdate.Add(existingProduct);
                         productsToNotify.Add(existingProduct); // 重新上架也算新品通知
                     }
@@ -469,6 +505,14 @@ public class ProductController : ControllerBase
                             hasChanges = true;
                         }
 
+                        if (!string.IsNullOrWhiteSpace(dto.Level)
+                            && TryNormalizeLevel(dto.Level, out var normalizedLevelForUpdate)
+                            && existingProduct.Level != normalizedLevelForUpdate)
+                        {
+                            existingProduct.Level = normalizedLevelForUpdate;
+                            hasChanges = true;
+                        }
+
                         if (hasChanges)
                         {
                             existingProduct.UpdatedAt = TaiwanTime.Now;
@@ -488,6 +532,7 @@ public class ProductController : ControllerBase
                         ProductUrl = dto.ProductUrl,
                         Color = dto.Color,
                         Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
+                        Level = NormalizeLevelOrDefault(dto.Level),
                         IsAvailable = true,
                         AvailabilityStatus = StatusInStock
                     };
@@ -634,6 +679,14 @@ public class ProductController : ControllerBase
                         changed = true;
                     }
 
+                    if (!string.IsNullOrWhiteSpace(dto.Level)
+                        && TryNormalizeLevel(dto.Level, out var normalizedLevelForDiscoverUpdate)
+                        && existing.Level != normalizedLevelForDiscoverUpdate)
+                    {
+                        existing.Level = normalizedLevelForDiscoverUpdate;
+                        changed = true;
+                    }
+
                     if (changed)
                     {
                         existing.UpdatedAt = TaiwanTime.Now;
@@ -656,6 +709,7 @@ public class ProductController : ControllerBase
                     ProductUrl = url,
                     Color = dto.Color,
                     Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
+                    Level = NormalizeLevelOrDefault(dto.Level),
                     IsAvailable = false,   // 先設 false，等監控抓到 InStock 由 /availability 發補貨通知
                     AvailabilityStatus = StatusOutOfStock,
                     CacheExpiresAt = null  // null → 立即納入 onlyExpired，下一輪就檢查
@@ -788,6 +842,29 @@ public class ProductController : ControllerBase
             default:
                 return false;
         }
+    }
+
+    private static bool TryNormalizeLevel(string? input, out string normalized)
+    {
+        normalized = LevelC;
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return false;
+        }
+
+        var val = input.Trim().ToUpperInvariant();
+        if (val is LevelA or LevelB or LevelC or LevelD or LevelE)
+        {
+            normalized = val;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string NormalizeLevelOrDefault(string? input)
+    {
+        return TryNormalizeLevel(input, out var normalized) ? normalized : LevelC;
     }
 
     private async Task<LineBroadcastResult> BroadcastLineMessageAsync(List<Product> products)

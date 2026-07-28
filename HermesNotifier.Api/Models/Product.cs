@@ -24,6 +24,12 @@ public class Product
     /// </summary>
     public string Category { get; set; } = "包款";
 
+    /// <summary>
+    /// 商品優先級：A/B/C/D/E（A 最高，E 最低）。
+    /// 供後端控管爬蟲處理順序與頻率策略。
+    /// </summary>
+    public string Level { get; set; } = "C";
+
     public bool IsAvailable { get; set; } = true;
 
     /// <summary>

@@ -84,6 +84,11 @@ public class ApplicationDbContext : DbContext
                 .HasMaxLength(20)
                 .HasDefaultValue("InStock");
 
+            entity.Property(e => e.Level)
+                .IsRequired()
+                .HasMaxLength(1)
+                .HasDefaultValue("C");
+
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
 
@@ -95,6 +100,9 @@ public class ApplicationDbContext : DbContext
 
             // 建立索引以加速「只查快取已過期、需重新抓取」的商品
             entity.HasIndex(e => e.CacheExpiresAt);
+
+            // 建立索引以加速依 Level 排序/篩選
+            entity.HasIndex(e => e.Level);
         });
 
         modelBuilder.Entity<ProductLog>(entity =>

@@ -32,4 +32,7 @@ public class DiscoverProductItem
 
     /// <summary>「包款」或「小皮件」。未提供預設「包款」。</summary>
     public string? Category { get; set; }
+
+    /// <summary>商品優先級：A/B/C/D/E。未提供預設 C。</summary>
+    public string? Level { get; set; }
 }
