@@ -1,6 +1,7 @@
 using HermesNotifier.Api.Data;
 using HermesNotifier.Api.DTOs.Requests.Admin;
 using HermesNotifier.Api.DTOs.Responses.Admin;
+using HermesNotifier.Api.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,11 @@ public class AdminController : ControllerBase
     private const string StatusInStock = "InStock";
     private const string StatusOutOfStock = "OutOfStock";
     private const string StatusNotFound = "NotFound";
+    private const string LevelA = "A";
+    private const string LevelB = "B";
+    private const string LevelC = "C";
+    private const string LevelD = "D";
+    private const string LevelE = "E";
 
     private const string CategoryBags = "包款";
     private const string CategorySmallLeather = "小皮件";
@@ -80,6 +86,7 @@ public class AdminController : ControllerBase
                 Color = p.Color,
                 ProductUrl = p.ProductUrl,
                 Type = p.Category,
+                Level = p.Level,
                 Status = p.AvailabilityStatus
             })
             .ToListAsync();
@@ -286,6 +293,47 @@ public class AdminController : ControllerBase
         });
     }
 
+    [HttpPatch("products/{productId}/level")]
+    public async Task<ActionResult> UpdateProductLevel(string productId, [FromBody] AdminUpdateProductLevelRequest request)
+    {
+        if (!TryNormalizeLevel(request.Level, out var normalizedLevel))
+        {
+            return BadRequest(new { Message = "level 僅支援 A/B/C/D/E。" });
+        }
+
+        var product = await _context.Products.FirstOrDefaultAsync(p => p.ProductId == productId);
+        if (product is null)
+        {
+            return NotFound(new { Message = $"找不到產品 ID: {productId}" });
+        }
+
+        if (product.Level == normalizedLevel)
+        {
+            return Ok(new
+            {
+                Message = "Level 無異動",
+                ProductId = product.ProductId,
+                Level = product.Level,
+                Changed = false
+            });
+        }
+
+        product.Level = normalizedLevel;
+        product.UpdatedAt = TaiwanTime.Now;
+        await _context.SaveChangesAsync();
+
+        _logger.LogInformation("管理員更新產品 Level：productId={productId}, level={level}", productId, normalizedLevel);
+
+        return Ok(new
+        {
+            Message = "Level 更新成功",
+            ProductId = product.ProductId,
+            Level = product.Level,
+            Changed = true,
+            UpdatedAt = product.UpdatedAt
+        });
+    }
+
     private static string ConvertLogActionToStatus(string action)
     {
         return action.Trim().ToLowerInvariant() switch
@@ -381,5 +429,23 @@ public class AdminController : ControllerBase
                 errorMessage = "status 僅支援 InStock / OutOfStock / NotFound。";
                 return false;
         }
+    }
+
+    private static bool TryNormalizeLevel(string? input, out string normalized)
+    {
+        normalized = LevelC;
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return false;
+        }
+
+        var value = input.Trim().ToUpperInvariant();
+        if (value is LevelA or LevelB or LevelC or LevelD or LevelE)
+        {
+            normalized = value;
+            return true;
+        }
+
+        return false;
     }
 }

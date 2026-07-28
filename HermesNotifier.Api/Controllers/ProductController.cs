@@ -222,16 +222,7 @@ public class ProductController : ControllerBase
 
             if (!string.IsNullOrWhiteSpace(request.Level))
             {
-                if (!TryNormalizeLevel(request.Level, out var normalizedLevelForPatch))
-                {
-                    return BadRequest(new { Message = "level 僅支援 A/B/C/D/E。" });
-                }
-
-                if (product.Level != normalizedLevelForPatch)
-                {
-                    product.Level = normalizedLevelForPatch;
-                    changed = true;
-                }
+                return BadRequest(new { Message = "Level 僅允許由管理員後台更新。" });
             }
 
             if (request.IsAvailable.HasValue || !string.IsNullOrWhiteSpace(request.AvailabilityStatus))
@@ -461,12 +452,6 @@ public class ProductController : ControllerBase
                         {
                             existingProduct.Category = dto.Category;
                         }
-                        if (!string.IsNullOrWhiteSpace(dto.Level)
-                            && TryNormalizeLevel(dto.Level, out var normalizedLevelForReopen)
-                            && existingProduct.Level != normalizedLevelForReopen)
-                        {
-                            existingProduct.Level = normalizedLevelForReopen;
-                        }
                         productsToUpdate.Add(existingProduct);
                         productsToNotify.Add(existingProduct); // 重新上架也算新品通知
                     }
@@ -505,14 +490,6 @@ public class ProductController : ControllerBase
                             hasChanges = true;
                         }
 
-                        if (!string.IsNullOrWhiteSpace(dto.Level)
-                            && TryNormalizeLevel(dto.Level, out var normalizedLevelForUpdate)
-                            && existingProduct.Level != normalizedLevelForUpdate)
-                        {
-                            existingProduct.Level = normalizedLevelForUpdate;
-                            hasChanges = true;
-                        }
-
                         if (hasChanges)
                         {
                             existingProduct.UpdatedAt = TaiwanTime.Now;
@@ -532,7 +509,7 @@ public class ProductController : ControllerBase
                         ProductUrl = dto.ProductUrl,
                         Color = dto.Color,
                         Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
-                        Level = ResolveLevelForUpsert(dto.Level, dto.Title),
+                        Level = ResolveLevelForUpsert(null, dto.Title),
                         IsAvailable = true,
                         AvailabilityStatus = StatusInStock
                     };
@@ -679,14 +656,6 @@ public class ProductController : ControllerBase
                         changed = true;
                     }
 
-                    if (!string.IsNullOrWhiteSpace(dto.Level)
-                        && TryNormalizeLevel(dto.Level, out var normalizedLevelForDiscoverUpdate)
-                        && existing.Level != normalizedLevelForDiscoverUpdate)
-                    {
-                        existing.Level = normalizedLevelForDiscoverUpdate;
-                        changed = true;
-                    }
-
                     if (changed)
                     {
                         existing.UpdatedAt = TaiwanTime.Now;
@@ -709,7 +678,7 @@ public class ProductController : ControllerBase
                     ProductUrl = url,
                     Color = dto.Color,
                     Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
-                    Level = ResolveLevelForUpsert(dto.Level, dto.Title),
+                    Level = ResolveLevelForUpsert(null, dto.Title),
                     IsAvailable = false,   // 先設 false，等監控抓到 InStock 由 /availability 發補貨通知
                     AvailabilityStatus = StatusOutOfStock,
                     CacheExpiresAt = null  // null → 立即納入 onlyExpired，下一輪就檢查

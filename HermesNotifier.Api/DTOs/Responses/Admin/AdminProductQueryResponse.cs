@@ -21,5 +21,7 @@ public class AdminProductItemDto
 
     public required string Type { get; set; }
 
+    public required string Level { get; set; }
+
     public required string Status { get; set; }
 }
