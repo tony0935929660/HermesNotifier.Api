@@ -532,7 +532,7 @@ public class ProductController : ControllerBase
                         ProductUrl = dto.ProductUrl,
                         Color = dto.Color,
                         Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
-                        Level = NormalizeLevelOrDefault(dto.Level),
+                        Level = ResolveLevelForUpsert(dto.Level, dto.Title),
                         IsAvailable = true,
                         AvailabilityStatus = StatusInStock
                     };
@@ -709,7 +709,7 @@ public class ProductController : ControllerBase
                     ProductUrl = url,
                     Color = dto.Color,
                     Category = string.IsNullOrWhiteSpace(dto.Category) ? "包款" : dto.Category,
-                    Level = NormalizeLevelOrDefault(dto.Level),
+                    Level = ResolveLevelForUpsert(dto.Level, dto.Title),
                     IsAvailable = false,   // 先設 false，等監控抓到 InStock 由 /availability 發補貨通知
                     AvailabilityStatus = StatusOutOfStock,
                     CacheExpiresAt = null  // null → 立即納入 onlyExpired，下一輪就檢查
@@ -862,9 +862,120 @@ public class ProductController : ControllerBase
         return false;
     }
 
-    private static string NormalizeLevelOrDefault(string? input)
+    private static string ResolveLevelForUpsert(string? inputLevel, string? title)
     {
-        return TryNormalizeLevel(input, out var normalized) ? normalized : LevelC;
+        if (TryNormalizeLevel(inputLevel, out var normalized))
+        {
+            return normalized;
+        }
+
+        if (TryInferLevelFromTitle(title, out var inferred))
+        {
+            return inferred;
+        }
+
+        return LevelC;
+    }
+
+    private static bool TryInferLevelFromTitle(string? title, out string level)
+    {
+        level = LevelC;
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return false;
+        }
+
+        var t = title.Trim();
+
+        // A
+        if (ContainsAny(t, "Picotin Lock 18", "Evelyne 16 Amazone", "Roulis", "Lindy 26", "Halzan迷你", "In-the-Loop 18"))
+        {
+            level = LevelA;
+            return true;
+        }
+
+        // B
+        if (ContainsAny(t,
+            "Picotin Lock 22",
+            "Evelyne 23 Poche III",
+            "24/24 - 21",
+            "Garden Party 30",
+            "Herbag Zip 20",
+            "Herbag Zip 31",
+            "Halzan 25",
+            "Kelly depeches 25",
+            "Kelly郵差包",
+            "Jypsiere迷你",
+            "Geta Slim",
+            "Neo Garden 23",
+            "Evelyne III 29"))
+        {
+            level = LevelB;
+            return true;
+        }
+
+        // C
+        if (ContainsAny(t,
+            "Poche Cliquetis",
+            "Videpoches",
+            "So Medor",
+            "Neo Medor",
+            "Steve light junior",
+            "Sac a depeches 21",
+            "Sac a depeches light 1-36",
+            "Bolide",
+            "Le Petit Sac",
+            "Steeple 25",
+            "Steeple 28",
+            "Maximors II",
+            "Maximors",
+            "Hac a Dos PM",
+            "Hac a Dos GM",
+            "Jypsiere mini Toile & Cuir"))
+        {
+            level = LevelC;
+            return true;
+        }
+
+        // D
+        if (ContainsAny(t,
+            "Cab'H",
+            "Medor手提包",
+            "En Piste",
+            "Tout en Carre",
+            "Balusoie",
+            "Fonsbelle Chaine",
+            "Herbag Messenger 39",
+            "Harnacheur",
+            "Onbody Etriviere",
+            "Collier d'Attelage",
+            "Della Cavalleria Elan",
+            "Messenger 57"))
+        {
+            level = LevelD;
+            return true;
+        }
+
+        // E
+        if (ContainsAny(t, "Sanglons", "Lassoie"))
+        {
+            level = LevelE;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsAny(string source, params string[] patterns)
+    {
+        foreach (var p in patterns)
+        {
+            if (source.Contains(p, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private async Task<LineBroadcastResult> BroadcastLineMessageAsync(List<Product> products)
