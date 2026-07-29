@@ -2,9 +2,13 @@ using HermesNotifier.Api.Data;
 using HermesNotifier.Api.DTOs.Requests.Admin;
 using HermesNotifier.Api.DTOs.Responses.Admin;
 using HermesNotifier.Api.Infrastructure;
+using HermesNotifier.Api.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.RegularExpressions;
 
 namespace HermesNotifier.Api.Controllers;
 
@@ -13,6 +17,8 @@ namespace HermesNotifier.Api.Controllers;
 [Authorize(Policy = "AdminOnly")]
 public class AdminController : ControllerBase
 {
+    private sealed record LineBroadcastResult(int AttemptedUsers, int SuccessUsers, int FailedUsers, int SuccessBatches);
+
     private const string StatusInStock = "InStock";
     private const string StatusOutOfStock = "OutOfStock";
     private const string StatusNotFound = "NotFound";
@@ -24,14 +30,25 @@ public class AdminController : ControllerBase
 
     private const string CategoryBags = "包款";
     private const string CategorySmallLeather = "小皮件";
+    private const string HermesHostSuffix = ".hermes.com";
+    private const string WebUnlockerEndpoint = "https://api.brightdata.com/request";
+
+    private static readonly Regex ProductIdInUrlRegex = new(@"/product/(?:[^/]*-)?(?<sku>H[A-Z0-9]{10})(?:/|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex NameRegex = new("\"name\"\\s*:\\s*\"(?<value>[^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex PriceRegex = new("\"price\"\\s*:\\s*\"?(?<value>[0-9]+(?:\\.[0-9]+)?)\"?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ImageRegex = new("\"image\"\\s*:\\s*\"(?<value>https?://[^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ColorRegex = new("\"color\"\\s*:\\s*\"(?<value>[^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex AvailabilityRegex = new("\"availability\"\\s*:\\s*\"[^\"]*/(?<value>InStock|OutOfStock|NotFound)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly ApplicationDbContext _context;
     private readonly ILogger<AdminController> _logger;
+    private readonly IConfiguration _config;
 
-    public AdminController(ApplicationDbContext context, ILogger<AdminController> logger)
+    public AdminController(ApplicationDbContext context, ILogger<AdminController> logger, IConfiguration config)
     {
         _context = context;
         _logger = logger;
+        _config = config;
     }
 
     /// <summary>
@@ -334,6 +351,179 @@ public class AdminController : ControllerBase
         });
     }
 
+    [HttpPost("products/import-by-url")]
+    public async Task<ActionResult> ImportProductByUrl([FromBody] AdminImportProductByUrlRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.ProductUrl))
+        {
+            return BadRequest(new { Message = "請提供商品網址。" });
+        }
+
+        if (!Uri.TryCreate(request.ProductUrl.Trim(), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+            || !(uri.Host.Equals("hermes.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.EndsWith(HermesHostSuffix, StringComparison.OrdinalIgnoreCase)))
+        {
+            return BadRequest(new { Message = "只允許匯入 hermes.com 的商品網址。" });
+        }
+
+        var productIdMatch = ProductIdInUrlRegex.Match(uri.AbsolutePath);
+        if (!productIdMatch.Success)
+        {
+            return BadRequest(new { Message = "網址格式不正確，無法解析商品 SKU（例如 H086955CC89）。" });
+        }
+
+        var productId = productIdMatch.Groups["sku"].Value.ToUpperInvariant();
+        var sourceUrl = $"https://www.hermes.com/tw/zh/product/{productId}/";
+
+        var apiKey = _config["WEB_UNLOCKER_API_KEY"];
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return StatusCode(500, new { Message = "伺服器未設定 WEB_UNLOCKER_API_KEY。" });
+        }
+
+        var zone = _config["WEB_UNLOCKER_ZONE"];
+        if (string.IsNullOrWhiteSpace(zone))
+        {
+            zone = "hermes_unlocker";
+        }
+
+        var fetchResult = await FetchHtmlViaWebUnlockerAsync(apiKey, zone, sourceUrl);
+        if (!fetchResult.Success)
+        {
+            return StatusCode(fetchResult.StatusCode, new { Message = fetchResult.ErrorMessage });
+        }
+
+        if (!TryParseHermesProduct(fetchResult.Html!, productId, sourceUrl, out var parsed, out var parseError))
+        {
+            return StatusCode(422, new { Message = parseError });
+        }
+
+        var now = TaiwanTime.Now;
+        var existing = await _context.Products.FirstOrDefaultAsync(p => p.ProductId == productId);
+        var isNew = existing is null;
+        var becameInStock = false;
+        var changed = false;
+
+        if (isNew)
+        {
+            existing = new Product
+            {
+                ProductId = productId,
+                Title = parsed.Title,
+                Price = parsed.Price,
+                ImageUrl = parsed.ImageUrl,
+                ProductUrl = parsed.ProductUrl,
+                Color = parsed.Color,
+                Category = CategoryBags,
+                Level = ResolveLevelForUpsert(null, parsed.Title),
+                IsAvailable = parsed.IsAvailable,
+                AvailabilityStatus = parsed.AvailabilityStatus,
+                CacheExpiresAt = null,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            becameInStock = parsed.AvailabilityStatus == StatusInStock;
+            changed = true;
+            await _context.Products.AddAsync(existing);
+        }
+        else
+        {
+            var oldStatus = existing!.AvailabilityStatus;
+
+            if (existing.Title != parsed.Title)
+            {
+                existing.Title = parsed.Title;
+                changed = true;
+            }
+
+            if (existing.Price != parsed.Price)
+            {
+                existing.Price = parsed.Price;
+                changed = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(parsed.ImageUrl) && existing.ImageUrl != parsed.ImageUrl)
+            {
+                existing.ImageUrl = parsed.ImageUrl;
+                changed = true;
+            }
+
+            if (existing.ProductUrl != parsed.ProductUrl)
+            {
+                existing.ProductUrl = parsed.ProductUrl;
+                changed = true;
+            }
+
+            if (existing.Color != parsed.Color)
+            {
+                existing.Color = parsed.Color;
+                changed = true;
+            }
+
+            var inferredLevel = ResolveLevelForUpsert(null, parsed.Title);
+            if (existing.Level != inferredLevel)
+            {
+                existing.Level = inferredLevel;
+                changed = true;
+            }
+
+            if (existing.AvailabilityStatus != parsed.AvailabilityStatus || existing.IsAvailable != parsed.IsAvailable)
+            {
+                existing.AvailabilityStatus = parsed.AvailabilityStatus;
+                existing.IsAvailable = parsed.IsAvailable;
+                changed = true;
+            }
+
+            becameInStock = oldStatus != StatusInStock && parsed.AvailabilityStatus == StatusInStock;
+            if (changed)
+            {
+                existing.UpdatedAt = now;
+            }
+        }
+
+        if (changed)
+        {
+            await _context.SaveChangesAsync();
+
+            await _context.ProductLogs.AddAsync(new ProductLog
+            {
+                ProductId = existing!.Id,
+                Action = GetProductLogAction(parsed.AvailabilityStatus),
+                LoggedAt = now
+            });
+            await _context.SaveChangesAsync();
+        }
+
+        LineBroadcastResult? notification = null;
+        if (parsed.AvailabilityStatus == StatusInStock && (isNew || becameInStock))
+        {
+            notification = await BroadcastLineMessageAsync(new List<Product> { existing! });
+        }
+
+        return Ok(new
+        {
+            Message = isNew ? "商品匯入成功" : "商品覆蓋更新成功",
+            ProductId = existing!.ProductId,
+            ProductUrl = existing.ProductUrl,
+            Level = existing.Level,
+            AvailabilityStatus = existing.AvailabilityStatus,
+            IsAvailable = existing.IsAvailable,
+            Changed = changed,
+            IsNew = isNew,
+            BecameInStock = becameInStock,
+            Notification = notification is null
+                ? null
+                : new
+                {
+                    AttemptedUsers = notification.AttemptedUsers,
+                    SuccessUsers = notification.SuccessUsers,
+                    FailedUsers = notification.FailedUsers,
+                    SuccessBatches = notification.SuccessBatches
+                }
+        });
+    }
+
     private static string ConvertLogActionToStatus(string action)
     {
         return action.Trim().ToLowerInvariant() switch
@@ -447,5 +637,353 @@ public class AdminController : ControllerBase
         }
 
         return false;
+    }
+
+    private static string GetProductLogAction(string status)
+    {
+        return status switch
+        {
+            StatusInStock => "Available",
+            StatusOutOfStock => "Unavailable",
+            StatusNotFound => "NotFound",
+            _ => "Unavailable"
+        };
+    }
+
+    private static string ResolveLevelForUpsert(string? inputLevel, string? title)
+    {
+        if (TryNormalizeLevel(inputLevel, out var normalized))
+        {
+            return normalized;
+        }
+
+        if (TryInferLevelFromTitle(title, out var inferred))
+        {
+            return inferred;
+        }
+
+        return LevelC;
+    }
+
+    private static bool TryInferLevelFromTitle(string? title, out string level)
+    {
+        level = LevelC;
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return false;
+        }
+
+        var t = title.Trim();
+
+        if (ContainsAny(t, "Picotin Lock 18", "Evelyne 16 Amazone", "Roulis", "Lindy 26", "Halzan迷你", "In-the-Loop 18"))
+        {
+            level = LevelA;
+            return true;
+        }
+
+        if (ContainsAny(t,
+            "Picotin Lock 22",
+            "Evelyne 23 Poche III",
+            "24/24 - 21",
+            "Garden Party 30",
+            "Herbag Zip 20",
+            "Herbag Zip 31",
+            "Halzan 25",
+            "Kelly depeches 25",
+            "Kelly郵差包",
+            "Jypsiere迷你",
+            "Geta Slim",
+            "Neo Garden 23",
+            "Evelyne III 29"))
+        {
+            level = LevelB;
+            return true;
+        }
+
+        if (ContainsAny(t,
+            "Poche Cliquetis",
+            "Videpoches",
+            "So Medor",
+            "Neo Medor",
+            "Steve light junior",
+            "Sac a depeches 21",
+            "Sac a depeches light 1-36",
+            "Bolide",
+            "Le Petit Sac",
+            "Steeple 25",
+            "Steeple 28",
+            "Maximors II",
+            "Maximors",
+            "Hac a Dos PM",
+            "Hac a Dos GM",
+            "Jypsiere mini Toile & Cuir"))
+        {
+            level = LevelC;
+            return true;
+        }
+
+        if (ContainsAny(t,
+            "Cab'H",
+            "Medor手提包",
+            "En Piste",
+            "Tout en Carre",
+            "Balusoie",
+            "Fonsbelle Chaine",
+            "Herbag Messenger 39",
+            "Harnacheur",
+            "Onbody Etriviere",
+            "Collier d'Attelage",
+            "Della Cavalleria Elan",
+            "Messenger 57"))
+        {
+            level = LevelD;
+            return true;
+        }
+
+        if (ContainsAny(t, "Sanglons", "Lassoie"))
+        {
+            level = LevelE;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsAny(string source, params string[] patterns)
+    {
+        foreach (var p in patterns)
+        {
+            if (source.Contains(p, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<LineBroadcastResult> BroadcastLineMessageAsync(List<Product> products)
+    {
+        var token = _config.GetLineChannelAccessToken();
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            _logger.LogWarning("Line:ChannelAccessToken / LINE_BOT_CHANNEL_ACCESS_TOKEN 未設定，無法使用 LINE Messaging API 廣播。");
+            return new LineBroadcastResult(0, 0, 0, 0);
+        }
+
+        try
+        {
+            var now = TaiwanTime.Now;
+            var activeSubscribers = await _context.Users
+                .Where(u => u.SubscribedUntil.HasValue && u.SubscribedUntil.Value > now)
+                .ToListAsync();
+
+            if (!activeSubscribers.Any())
+            {
+                _logger.LogInformation("沒有訂閱中的使用者，跳過通知發送");
+                return new LineBroadcastResult(0, 0, 0, 0);
+            }
+
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var attemptedUsers = activeSubscribers.Count;
+            var successUsers = 0;
+            var failedUsers = 0;
+            var successBatches = 0;
+            var productBatches = products.Chunk(12).ToArray();
+
+            foreach (var batch in productBatches)
+            {
+                var bubbles = batch.Select(p =>
+                {
+                    var lineTargetUrl = string.IsNullOrWhiteSpace(p.ProductUrl)
+                        ? "https://www.hermes.com/tw/zh/"
+                        : p.ProductUrl;
+
+                    var bubble = new Dictionary<string, object> { ["type"] = "bubble" };
+                    if (!string.IsNullOrWhiteSpace(p.ImageUrl))
+                    {
+                        bubble["hero"] = new
+                        {
+                            type = "image",
+                            size = "full",
+                            aspectRatio = "1:1",
+                            aspectMode = "cover",
+                            url = p.ImageUrl,
+                            action = new { type = "uri", uri = lineTargetUrl }
+                        };
+                    }
+
+                    bubble["body"] = new
+                    {
+                        type = "box",
+                        layout = "vertical",
+                        spacing = "md",
+                        contents = new object[]
+                        {
+                            new { type = "text", text = p.Title, weight = "bold", wrap = true, size = "sm" },
+                            new { type = "text", text = $"NT$ {p.Price:N0}", color = "#999999", size = "xs" },
+                            new { type = "text", text = p.Color ?? string.Empty, color = "#666666", size = "xs" }
+                        }
+                    };
+
+                    if (string.IsNullOrWhiteSpace(p.ImageUrl))
+                    {
+                        bubble["action"] = new { type = "uri", uri = lineTargetUrl };
+                    }
+
+                    return bubble;
+                }).ToList();
+
+                var flexMessage = new
+                {
+                    type = "flex",
+                    altText = $"Hermès 商品上架通知 - 共 {products.Count} 件商品",
+                    contents = new
+                    {
+                        type = "carousel",
+                        contents = bubbles
+                    }
+                };
+
+                foreach (var userBatch in activeSubscribers.Select(u => u.LineId).Chunk(500))
+                {
+                    var payload = new { to = userBatch.ToArray(), messages = new[] { flexMessage } };
+                    var response = await client.PostAsJsonAsync("https://api.line.me/v2/bot/message/multicast", payload);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        successUsers += userBatch.Length;
+                        successBatches += 1;
+                    }
+                    else
+                    {
+                        failedUsers += userBatch.Length;
+                    }
+                }
+            }
+
+            return new LineBroadcastResult(attemptedUsers, successUsers, failedUsers, successBatches);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "LINE multicast 發送失敗");
+            return new LineBroadcastResult(0, 0, 0, 0);
+        }
+    }
+
+    private async Task<(bool Success, int StatusCode, string? Html, string? ErrorMessage)> FetchHtmlViaWebUnlockerAsync(
+        string apiKey,
+        string zone,
+        string url)
+    {
+        try
+        {
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+            var payload = new
+            {
+                zone,
+                url,
+                format = "raw"
+            };
+
+            var response = await client.PostAsJsonAsync(WebUnlockerEndpoint, payload);
+            var html = await response.Content.ReadAsStringAsync();
+            var brdError = response.Headers.TryGetValues("x-brd-error", out var values)
+                ? values.FirstOrDefault()
+                : null;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return (false, (int)response.StatusCode, null, $"Web Unlocker 失敗：{response.StatusCode}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(brdError) || string.IsNullOrWhiteSpace(html))
+            {
+                return (false, 502, null, $"Web Unlocker 未取得有效內容：{brdError ?? "空白回應"}");
+            }
+
+            return (true, 200, html, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Web Unlocker 抓取失敗：{url}", url);
+            return (false, 500, null, "Web Unlocker 抓取失敗，請稍後再試。");
+        }
+    }
+
+    private static bool TryParseHermesProduct(
+        string html,
+        string productId,
+        string productUrl,
+        out (string Title, decimal Price, string? ImageUrl, string? Color, bool IsAvailable, string AvailabilityStatus, string ProductUrl) result,
+        out string error)
+    {
+        result = default;
+        error = string.Empty;
+
+        if (html.Contains("<title>404", StringComparison.OrdinalIgnoreCase) || html.Contains("not-found", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "商品頁回傳 404/NotFound，無法匯入。";
+            return false;
+        }
+
+        var title = DecodeJsonText(NameRegex.Match(html).Groups["value"].Value).Trim();
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            error = "解析失敗：找不到商品名稱。";
+            return false;
+        }
+
+        var availabilityText = AvailabilityRegex.Match(html).Groups["value"].Value;
+        var availabilityStatus = availabilityText.Equals("InStock", StringComparison.OrdinalIgnoreCase)
+            ? StatusInStock
+            : availabilityText.Equals("OutOfStock", StringComparison.OrdinalIgnoreCase)
+                ? StatusOutOfStock
+                : StatusNotFound;
+
+        var isAvailable = availabilityStatus == StatusInStock;
+
+        decimal price = 0;
+        var priceText = PriceRegex.Match(html).Groups["value"].Value;
+        if (!decimal.TryParse(priceText, out price))
+        {
+            price = 0;
+        }
+
+        var imageUrl = DecodeJsonText(ImageRegex.Match(html).Groups["value"].Value);
+        if (string.IsNullOrWhiteSpace(imageUrl))
+        {
+            imageUrl = null;
+        }
+
+        var color = DecodeJsonText(ColorRegex.Match(html).Groups["value"].Value);
+        if (string.IsNullOrWhiteSpace(color))
+        {
+            color = null;
+        }
+
+        result = (title, price, imageUrl, color, isAvailable, availabilityStatus, productUrl);
+        return true;
+    }
+
+    private static string DecodeJsonText(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        return value
+            .Replace("\\u002F", "/", StringComparison.Ordinal)
+            .Replace("\\/", "/", StringComparison.Ordinal)
+            .Replace("\\\"", "\"", StringComparison.Ordinal)
+            .Replace("\\n", " ", StringComparison.Ordinal)
+            .Replace("\\r", " ", StringComparison.Ordinal)
+            .Trim();
     }
 }
