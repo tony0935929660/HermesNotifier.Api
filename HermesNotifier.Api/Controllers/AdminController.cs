@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace HermesNotifier.Api.Controllers;
@@ -18,6 +19,47 @@ namespace HermesNotifier.Api.Controllers;
 public class AdminController : ControllerBase
 {
     private sealed record LineBroadcastResult(int AttemptedUsers, int SuccessUsers, int FailedUsers, int SuccessBatches);
+    private sealed record ParsedProduct(
+        string Title,
+        decimal Price,
+        string? ImageUrl,
+        string? Color,
+        bool IsAvailable,
+        string AvailabilityStatus,
+        string ProductUrl);
+
+    private sealed class ScraperServiceResponse
+    {
+        [JsonPropertyName("success")]
+        public bool Success { get; set; }
+
+        [JsonPropertyName("errorMessage")]
+        public string? ErrorMessage { get; set; }
+
+        [JsonPropertyName("verdict")]
+        public string? Verdict { get; set; }
+
+        [JsonPropertyName("tier")]
+        public string? Tier { get; set; }
+
+        [JsonPropertyName("title")]
+        public string? Title { get; set; }
+
+        [JsonPropertyName("price")]
+        public decimal? Price { get; set; }
+
+        [JsonPropertyName("imageUrl")]
+        public string? ImageUrl { get; set; }
+
+        [JsonPropertyName("color")]
+        public string? Color { get; set; }
+
+        [JsonPropertyName("isAvailable")]
+        public bool? IsAvailable { get; set; }
+
+        [JsonPropertyName("availabilityStatus")]
+        public string? AvailabilityStatus { get; set; }
+    }
 
     private const string StatusInStock = "InStock";
     private const string StatusOutOfStock = "OutOfStock";
@@ -31,14 +73,9 @@ public class AdminController : ControllerBase
     private const string CategoryBags = "包款";
     private const string CategorySmallLeather = "小皮件";
     private const string HermesHostSuffix = ".hermes.com";
-    private const string WebUnlockerEndpoint = "https://api.brightdata.com/request";
+    private const string ScraperServiceImportPath = "/scrape/product-by-url";
 
     private static readonly Regex ProductIdInUrlRegex = new(@"/product/(?:[^/]*-)?(?<sku>H[A-Z0-9]{10})(?:/|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex NameRegex = new("\"name\"\\s*:\\s*\"(?<value>[^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex PriceRegex = new("\"price\"\\s*:\\s*\"?(?<value>[0-9]+(?:\\.[0-9]+)?)\"?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ImageRegex = new("\"image\"\\s*:\\s*\"(?<value>https?://[^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ColorRegex = new("\"color\"\\s*:\\s*\"(?<value>[^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex AvailabilityRegex = new("\"availability\"\\s*:\\s*\"[^\"]*/(?<value>InStock|OutOfStock|NotFound)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly ApplicationDbContext _context;
     private readonly ILogger<AdminController> _logger;
@@ -376,28 +413,13 @@ public class AdminController : ControllerBase
         var productId = productIdMatch.Groups["sku"].Value.ToUpperInvariant();
         var sourceUrl = $"https://www.hermes.com/tw/zh/product/{productId}/";
 
-        var apiKey = _config["WEB_UNLOCKER_API_KEY"];
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            return StatusCode(500, new { Message = "伺服器未設定 WEB_UNLOCKER_API_KEY。" });
-        }
-
-        var zone = _config["WEB_UNLOCKER_ZONE"];
-        if (string.IsNullOrWhiteSpace(zone))
-        {
-            zone = "hermes_unlocker";
-        }
-
-        var fetchResult = await FetchHtmlViaWebUnlockerAsync(apiKey, zone, sourceUrl);
+        var fetchResult = await FetchProductViaScraperServiceAsync(sourceUrl);
         if (!fetchResult.Success)
         {
             return StatusCode(fetchResult.StatusCode, new { Message = fetchResult.ErrorMessage });
         }
 
-        if (!TryParseHermesProduct(fetchResult.Html!, productId, sourceUrl, out var parsed, out var parseError))
-        {
-            return StatusCode(422, new { Message = parseError });
-        }
+        var parsed = fetchResult.Product!;
 
         var now = TaiwanTime.Now;
         var existing = await _context.Products.FirstOrDefaultAsync(p => p.ProductId == productId);
@@ -512,6 +534,8 @@ public class AdminController : ControllerBase
             Changed = changed,
             IsNew = isNew,
             BecameInStock = becameInStock,
+            ScraperTier = fetchResult.Tier,
+            ScraperVerdict = fetchResult.Verdict,
             Notification = notification is null
                 ? null
                 : new
@@ -522,6 +546,73 @@ public class AdminController : ControllerBase
                     SuccessBatches = notification.SuccessBatches
                 }
         });
+    }
+
+    private async Task<(bool Success, int StatusCode, ParsedProduct? Product, string? ErrorMessage, string? Tier, string? Verdict)> FetchProductViaScraperServiceAsync(string productUrl)
+    {
+        var baseUrl = _config["SCRAPER_SERVICE_BASE_URL"];
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return (false, 500, null, "伺服器未設定 SCRAPER_SERVICE_BASE_URL。", null, null);
+        }
+
+        var requestBody = new
+        {
+            productUrl,
+            forceTier = _config["SCRAPER_SERVICE_FORCE_TIER"]
+        };
+
+        try
+        {
+            using var client = new HttpClient();
+
+            var apiKey = _config["SCRAPER_SERVICE_API_KEY"];
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                client.DefaultRequestHeaders.Add("x-api-key", apiKey);
+            }
+
+            var endpoint = $"{baseUrl.TrimEnd('/')}{ScraperServiceImportPath}";
+            var response = await client.PostAsJsonAsync(endpoint, requestBody);
+            var payload = await response.Content.ReadFromJsonAsync<ScraperServiceResponse>();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var msg = payload?.ErrorMessage ?? $"Scraper service 失敗：{response.StatusCode}";
+                return (false, (int)response.StatusCode, null, msg, payload?.Tier, payload?.Verdict);
+            }
+
+            if (payload is null)
+            {
+                return (false, 502, null, "Scraper service 回傳格式錯誤。", null, null);
+            }
+
+            if (!payload.Success)
+            {
+                return (false, 502, null, payload.ErrorMessage ?? "Scraper service 未取得有效內容。", payload.Tier, payload.Verdict);
+            }
+
+            if (string.IsNullOrWhiteSpace(payload.Title) || string.IsNullOrWhiteSpace(payload.AvailabilityStatus) || !payload.IsAvailable.HasValue)
+            {
+                return (false, 422, null, "Scraper service 回傳資料不完整。", payload.Tier, payload.Verdict);
+            }
+
+            var parsed = new ParsedProduct(
+                payload.Title.Trim(),
+                payload.Price ?? 0,
+                payload.ImageUrl,
+                payload.Color,
+                payload.IsAvailable.Value,
+                payload.AvailabilityStatus,
+                productUrl);
+
+            return (true, 200, parsed, null, payload.Tier, payload.Verdict);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "呼叫 scraper service 失敗：{url}", productUrl);
+            return (false, 500, null, "呼叫 scraper service 失敗，請稍後再試。", null, null);
+        }
     }
 
     private static string ConvertLogActionToStatus(string action)
@@ -874,116 +965,4 @@ public class AdminController : ControllerBase
         }
     }
 
-    private async Task<(bool Success, int StatusCode, string? Html, string? ErrorMessage)> FetchHtmlViaWebUnlockerAsync(
-        string apiKey,
-        string zone,
-        string url)
-    {
-        try
-        {
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-
-            var payload = new
-            {
-                zone,
-                url,
-                format = "raw"
-            };
-
-            var response = await client.PostAsJsonAsync(WebUnlockerEndpoint, payload);
-            var html = await response.Content.ReadAsStringAsync();
-            var brdError = response.Headers.TryGetValues("x-brd-error", out var values)
-                ? values.FirstOrDefault()
-                : null;
-
-            if (!response.IsSuccessStatusCode)
-            {
-                return (false, (int)response.StatusCode, null, $"Web Unlocker 失敗：{response.StatusCode}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(brdError) || string.IsNullOrWhiteSpace(html))
-            {
-                return (false, 502, null, $"Web Unlocker 未取得有效內容：{brdError ?? "空白回應"}");
-            }
-
-            return (true, 200, html, null);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Web Unlocker 抓取失敗：{url}", url);
-            return (false, 500, null, "Web Unlocker 抓取失敗，請稍後再試。");
-        }
-    }
-
-    private static bool TryParseHermesProduct(
-        string html,
-        string productId,
-        string productUrl,
-        out (string Title, decimal Price, string? ImageUrl, string? Color, bool IsAvailable, string AvailabilityStatus, string ProductUrl) result,
-        out string error)
-    {
-        result = default;
-        error = string.Empty;
-
-        if (html.Contains("<title>404", StringComparison.OrdinalIgnoreCase) || html.Contains("not-found", StringComparison.OrdinalIgnoreCase))
-        {
-            error = "商品頁回傳 404/NotFound，無法匯入。";
-            return false;
-        }
-
-        var title = DecodeJsonText(NameRegex.Match(html).Groups["value"].Value).Trim();
-        if (string.IsNullOrWhiteSpace(title))
-        {
-            error = "解析失敗：找不到商品名稱。";
-            return false;
-        }
-
-        var availabilityText = AvailabilityRegex.Match(html).Groups["value"].Value;
-        var availabilityStatus = availabilityText.Equals("InStock", StringComparison.OrdinalIgnoreCase)
-            ? StatusInStock
-            : availabilityText.Equals("OutOfStock", StringComparison.OrdinalIgnoreCase)
-                ? StatusOutOfStock
-                : StatusNotFound;
-
-        var isAvailable = availabilityStatus == StatusInStock;
-
-        decimal price = 0;
-        var priceText = PriceRegex.Match(html).Groups["value"].Value;
-        if (!decimal.TryParse(priceText, out price))
-        {
-            price = 0;
-        }
-
-        var imageUrl = DecodeJsonText(ImageRegex.Match(html).Groups["value"].Value);
-        if (string.IsNullOrWhiteSpace(imageUrl))
-        {
-            imageUrl = null;
-        }
-
-        var color = DecodeJsonText(ColorRegex.Match(html).Groups["value"].Value);
-        if (string.IsNullOrWhiteSpace(color))
-        {
-            color = null;
-        }
-
-        result = (title, price, imageUrl, color, isAvailable, availabilityStatus, productUrl);
-        return true;
-    }
-
-    private static string DecodeJsonText(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return value;
-        }
-
-        return value
-            .Replace("\\u002F", "/", StringComparison.Ordinal)
-            .Replace("\\/", "/", StringComparison.Ordinal)
-            .Replace("\\\"", "\"", StringComparison.Ordinal)
-            .Replace("\\n", " ", StringComparison.Ordinal)
-            .Replace("\\r", " ", StringComparison.Ordinal)
-            .Trim();
-    }
 }
