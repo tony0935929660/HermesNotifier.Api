@@ -67,7 +67,8 @@ public class ProductController : ControllerBase
                 var now = TaiwanTime.Now;
                 query = query
                     .Where(p => p.CacheExpiresAt == null || p.CacheExpiresAt <= now)
-                    .OrderBy(p => p.Level == LevelA ? 0 :
+                    .OrderBy(p => p.CacheExpiresAt == null ? 0 : 1)
+                    .ThenBy(p => p.Level == LevelA ? 0 :
                                   p.Level == LevelB ? 1 :
                                   p.Level == LevelC ? 2 :
                                   p.Level == LevelD ? 3 : 4)
@@ -192,7 +193,12 @@ public class ProductController : ControllerBase
 
             if (!string.IsNullOrWhiteSpace(request.Title) && product.Title != request.Title)
             {
-                product.Title = request.Title;
+                var wasPlaceholderTitle = product.Title == product.ProductId;
+                product.Title = request.Title.Trim();
+                if (wasPlaceholderTitle)
+                {
+                    product.Level = ResolveLevelForUpsert(null, product.Title);
+                }
                 changed = true;
             }
 

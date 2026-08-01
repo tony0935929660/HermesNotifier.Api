@@ -24,4 +24,6 @@ public class AdminProductItemDto
     public required string Level { get; set; }
 
     public required string Status { get; set; }
+
+    public bool PendingInitialScrape { get; set; }
 }

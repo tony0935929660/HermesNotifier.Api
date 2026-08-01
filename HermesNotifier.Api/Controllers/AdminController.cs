@@ -2,9 +2,11 @@ using HermesNotifier.Api.Data;
 using HermesNotifier.Api.DTOs.Requests.Admin;
 using HermesNotifier.Api.DTOs.Responses.Admin;
 using HermesNotifier.Api.Infrastructure;
+using HermesNotifier.Api.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 
 namespace HermesNotifier.Api.Controllers;
 
@@ -24,6 +26,11 @@ public class AdminController : ControllerBase
 
     private const string CategoryBags = "包款";
     private const string CategorySmallLeather = "小皮件";
+    private const string HermesHostSuffix = ".hermes.com";
+
+    private static readonly Regex ProductSkuRegex = new(
+        @"/product/(?:[^/]*-)?(?<sku>H[A-Z0-9]{10})(?:/|$)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly ApplicationDbContext _context;
     private readonly ILogger<AdminController> _logger;
@@ -75,7 +82,8 @@ public class AdminController : ControllerBase
         var pageSize = NormalizePageSize(request.PageSize);
 
         var items = await query
-            .OrderByDescending(p => p.UpdatedAt ?? p.CreatedAt)
+            .OrderBy(p => p.CacheExpiresAt == null ? 0 : 1)
+            .ThenByDescending(p => p.UpdatedAt ?? p.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Select(p => new AdminProductItemDto
@@ -87,7 +95,8 @@ public class AdminController : ControllerBase
                 ProductUrl = p.ProductUrl,
                 Type = p.Category,
                 Level = p.Level,
-                Status = p.AvailabilityStatus
+                Status = p.AvailabilityStatus,
+                PendingInitialScrape = p.CacheExpiresAt == null
             })
             .ToListAsync();
 
@@ -331,6 +340,78 @@ public class AdminController : ControllerBase
             Level = product.Level,
             Changed = true,
             UpdatedAt = product.UpdatedAt
+        });
+    }
+
+    [HttpPost("products/add-by-url")]
+    public async Task<ActionResult> AddProductByUrl([FromBody] AdminAddProductByUrlRequest request)
+    {
+        var productUrl = request.ProductUrl?.Trim();
+        if (string.IsNullOrWhiteSpace(productUrl))
+        {
+            return BadRequest(new { Message = "請提供商品網址。" });
+        }
+
+        if (!Uri.TryCreate(productUrl, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || !(uri.Host.Equals("hermes.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.EndsWith(HermesHostSuffix, StringComparison.OrdinalIgnoreCase)))
+        {
+            return BadRequest(new { Message = "只允許加入 https://hermes.com 的商品網址。" });
+        }
+
+        var skuMatch = ProductSkuRegex.Match(uri.AbsolutePath);
+        if (!skuMatch.Success)
+        {
+            return BadRequest(new { Message = "網址格式不正確，無法解析商品 SKU（例如 H086955CC89）。" });
+        }
+
+        var sku = skuMatch.Groups["sku"].Value.ToUpperInvariant();
+        var productId = sku[1..];
+        var existing = await _context.Products
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.ProductId == productId);
+
+        if (existing is not null)
+        {
+            return Ok(new
+            {
+                Message = $"商品 {productId} 已存在。",
+                ProductId = productId,
+                ProductUrl = existing.ProductUrl,
+                Added = false,
+                PendingInitialScrape = existing.CacheExpiresAt == null
+            });
+        }
+
+        var product = new Product
+        {
+            ProductId = productId,
+            Title = productId,
+            Price = 0,
+            ImageUrl = null,
+            ProductUrl = productUrl,
+            Color = null,
+            Category = CategoryBags,
+            Level = LevelC,
+            IsAvailable = false,
+            AvailabilityStatus = StatusOutOfStock,
+            CacheExpiresAt = null,
+            CreatedAt = TaiwanTime.Now
+        };
+
+        await _context.Products.AddAsync(product);
+        await _context.SaveChangesAsync();
+
+        _logger.LogInformation("管理員加入待爬商品：productId={productId}, url={productUrl}", productId, productUrl);
+
+        return Ok(new
+        {
+            Message = $"商品 {productId} 已加入監控，將於下一輪優先爬取。",
+            ProductId = productId,
+            ProductUrl = product.ProductUrl,
+            Added = true,
+            PendingInitialScrape = true
         });
     }
 
