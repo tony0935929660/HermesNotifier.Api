@@ -82,7 +82,7 @@ public class AdminController : ControllerBase
         var pageSize = NormalizePageSize(request.PageSize);
 
         var items = await query
-            .OrderBy(p => p.CacheExpiresAt == null ? 0 : 1)
+            .OrderBy(p => p.Title == p.ProductId && p.Price == 0 ? 0 : 1)
             .ThenByDescending(p => p.UpdatedAt ?? p.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -96,7 +96,7 @@ public class AdminController : ControllerBase
                 Type = p.Category,
                 Level = p.Level,
                 Status = p.AvailabilityStatus,
-                PendingInitialScrape = p.CacheExpiresAt == null
+                PendingInitialScrape = p.Title == p.ProductId && p.Price == 0
             })
             .ToListAsync();
 
@@ -380,7 +380,7 @@ public class AdminController : ControllerBase
                 ProductId = productId,
                 ProductUrl = existing.ProductUrl,
                 Added = false,
-                PendingInitialScrape = existing.CacheExpiresAt == null
+                PendingInitialScrape = existing.Title == existing.ProductId && existing.Price == 0
             });
         }
 

@@ -63,11 +63,11 @@ public class ProductController : ControllerBase
             if (onlyExpired)
             {
                 // 只選「快取已過期（CacheExpiresAt <= 現在）或從未抓取（null）」的商品，
-                // 並讓最久未更新（含 null）排在最前面優先重抓。
+                // 並讓仍使用 placeholder 名稱與價格的商品優先抓取。
                 var now = TaiwanTime.Now;
                 query = query
                     .Where(p => p.CacheExpiresAt == null || p.CacheExpiresAt <= now)
-                    .OrderBy(p => p.CacheExpiresAt == null ? 0 : 1)
+                    .OrderBy(p => p.Title == p.ProductId && p.Price == 0 ? 0 : 1)
                     .ThenBy(p => p.Level == LevelA ? 0 :
                                   p.Level == LevelB ? 1 :
                                   p.Level == LevelC ? 2 :
