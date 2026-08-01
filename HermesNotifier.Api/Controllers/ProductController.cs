@@ -6,6 +6,7 @@ using HermesNotifier.Api.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Headers;
+using System.Text.RegularExpressions;
 
 namespace HermesNotifier.Api.Controllers;
 
@@ -37,6 +38,7 @@ public class ProductController : ControllerBase
     private const string LevelC = "C";
     private const string LevelD = "D";
     private const string LevelE = "E";
+    private static readonly Regex ProductIdRegex = new("^[0-9A-Z]{10}$", RegexOptions.Compiled);
 
     public ProductController(
         ApplicationDbContext context,
@@ -785,6 +787,198 @@ public class ProductController : ControllerBase
             _logger.LogError(ex, "Discovery 處理時發生錯誤");
             return StatusCode(500, new { Message = $"Discovery 失敗：{ex.Message}" });
         }
+    }
+
+    [HttpPost("variants/sync")]
+    public async Task<ActionResult> SyncProductVariants([FromBody] SyncProductVariantsRequest request)
+    {
+        try
+        {
+            var sourceProductId = request.SourceProductId.Trim().ToUpperInvariant().TrimStart('H');
+            var sourceProduct = await _context.Products
+                .FirstOrDefaultAsync(p => p.ProductId == sourceProductId);
+
+            if (sourceProduct == null)
+            {
+                return NotFound(new { Message = $"找不到來源產品 ID: {request.SourceProductId}" });
+            }
+
+            var normalizedVariants = request.Variants
+                .Select(item => new
+                {
+                    Item = item,
+                    ProductId = item.ProductId.Trim().ToUpperInvariant().TrimStart('H')
+                })
+                .GroupBy(x => x.ProductId)
+                .Select(group => group.First())
+                .ToList();
+            var requestedProductIds = normalizedVariants
+                .Select(x => x.ProductId)
+                .Where(productId => ProductIdRegex.IsMatch(productId))
+                .ToHashSet();
+            var existingProducts = await _context.Products
+                .Where(p => requestedProductIds.Contains(p.ProductId))
+                .ToDictionaryAsync(p => p.ProductId);
+            var cacheExpiresAt = TaiwanTime.ToTaiwan(request.CacheExpiresAt);
+            var addedProductIds = new List<string>();
+            var updatedProductIds = new List<string>();
+            var syncedProductIds = new List<string>();
+            var pendingProductIds = new List<string>();
+            var failedProductIds = new List<string>();
+            var productsToLog = new List<Product>();
+            var productsToNotify = new List<Product>();
+
+            foreach (var normalized in normalizedVariants)
+            {
+                var item = normalized.Item;
+                var productId = normalized.ProductId;
+                if (!ProductIdRegex.IsMatch(productId)
+                    || !TryNormalizeHermesProductUrl(item.ProductUrl, productId, out var productUrl))
+                {
+                    failedProductIds.Add(productId);
+                    continue;
+                }
+
+                var availabilityStatus = item.IsAvailable ? StatusInStock : StatusOutOfStock;
+                if (!existingProducts.TryGetValue(productId, out var product))
+                {
+                    product = new Product
+                    {
+                        ProductId = productId,
+                        Title = productId,
+                        Price = 0,
+                        ProductUrl = productUrl,
+                        Category = sourceProduct.Category,
+                        Level = sourceProduct.Level,
+                        IsAvailable = false,
+                        AvailabilityStatus = StatusOutOfStock,
+                        CacheExpiresAt = null
+                    };
+                    await _context.Products.AddAsync(product);
+                    existingProducts[productId] = product;
+                    addedProductIds.Add(productId);
+                    continue;
+                }
+
+                if (product.Title == product.ProductId && product.Price == 0)
+                {
+                    product.ProductUrl = productUrl;
+                    product.CacheExpiresAt = null;
+                    product.UpdatedAt = TaiwanTime.Now;
+                    pendingProductIds.Add(productId);
+                    continue;
+                }
+
+                var becameAvailable = product.AvailabilityStatus != StatusInStock && item.IsAvailable;
+                var statusChanged = product.AvailabilityStatus != availabilityStatus
+                    || product.IsAvailable != item.IsAvailable;
+
+                product.ProductUrl = productUrl;
+                product.IsAvailable = item.IsAvailable;
+                product.AvailabilityStatus = availabilityStatus;
+                product.CacheExpiresAt = cacheExpiresAt;
+                product.UpdatedAt = TaiwanTime.Now;
+                updatedProductIds.Add(productId);
+
+                if (statusChanged)
+                {
+                    productsToLog.Add(product);
+                }
+                if (becameAvailable)
+                {
+                    productsToNotify.Add(product);
+                }
+
+                syncedProductIds.Add(productId);
+            }
+
+            if (syncedProductIds.Count > 0 || addedProductIds.Count > 0 || pendingProductIds.Count > 0)
+            {
+                await _context.SaveChangesAsync();
+            }
+
+            if (productsToLog.Count > 0)
+            {
+                await _context.ProductLogs.AddRangeAsync(productsToLog.Select(product => new ProductLog
+                {
+                    ProductId = product.Id,
+                    Action = GetProductLogAction(product.AvailabilityStatus),
+                    LoggedAt = TaiwanTime.Now
+                }));
+                await _context.SaveChangesAsync();
+            }
+
+            LineBroadcastResult? lineNotification = null;
+            if (productsToNotify.Count > 0)
+            {
+                try
+                {
+                    lineNotification = await BroadcastLineMessageAsync(productsToNotify);
+                }
+                catch (Exception notifyEx)
+                {
+                    _logger.LogError(notifyEx, "商品變體同步後的補貨通知發送失敗: {sourceProductId}", sourceProductId);
+                    lineNotification = new LineBroadcastResult(0, 0, 0, 0);
+                }
+            }
+
+            _logger.LogInformation(
+                "商品變體同步完成：source={sourceProductId}, received={received}, synced={synced}, added={added}, pending={pending}, updated={updated}, failed={failed}, notified={notified}",
+                sourceProductId,
+                request.Variants.Count,
+                syncedProductIds.Count,
+                addedProductIds.Count,
+                pendingProductIds.Count,
+                updatedProductIds.Count,
+                failedProductIds.Count,
+                productsToNotify.Count);
+
+            return Ok(new
+            {
+                SourceProductId = sourceProductId,
+                ReceivedCount = request.Variants.Count,
+                SyncedCount = syncedProductIds.Count,
+                AddedCount = addedProductIds.Count,
+                PendingCount = pendingProductIds.Count,
+                UpdatedCount = updatedProductIds.Count,
+                FailedCount = failedProductIds.Count,
+                SyncedProductIds = syncedProductIds,
+                AddedProductIds = addedProductIds,
+                PendingProductIds = pendingProductIds,
+                UpdatedProductIds = updatedProductIds,
+                FailedProductIds = failedProductIds,
+                Notification = lineNotification is null
+                    ? null
+                    : new
+                    {
+                        AttemptedUsers = lineNotification.AttemptedUsers,
+                        SuccessUsers = lineNotification.SuccessUsers,
+                        FailedUsers = lineNotification.FailedUsers,
+                        SuccessBatches = lineNotification.SuccessBatches
+                    }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "商品變體同步失敗: {sourceProductId}", request.SourceProductId);
+            return StatusCode(500, new { Message = "商品變體同步失敗" });
+        }
+    }
+
+    private static bool TryNormalizeHermesProductUrl(string input, string productId, out string productUrl)
+    {
+        productUrl = string.Empty;
+        if (!Uri.TryCreate(input.Trim(), UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || !(uri.Host.Equals("www.hermes.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.Equals("hermes.com", StringComparison.OrdinalIgnoreCase))
+            || !uri.AbsolutePath.Contains($"-H{productId}", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        productUrl = uri.GetLeftPart(UriPartial.Path);
+        return true;
     }
 
     private static string GetProductLogAction(string status)
