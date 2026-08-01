@@ -15,6 +15,16 @@ public class ProductController : ControllerBase
 {
     private sealed record LineBroadcastResult(int AttemptedUsers, int SuccessUsers, int FailedUsers, int SuccessBatches);
 
+    private static readonly HashSet<string> ScrapeFailureTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BLOCKED",
+        "DATADOME",
+        "ERROR",
+        "EMPTY",
+        "UNKNOWN",
+        "PARTIAL"
+    };
+
     private readonly ApplicationDbContext _context;
     private readonly ILogger<ProductController> _logger;
     private readonly IConfiguration _config;
@@ -414,6 +424,63 @@ public class ProductController : ControllerBase
         {
             _logger.LogError(ex, "更新產品 {productId} 的上架狀態時發生錯誤", productId);
             return StatusCode(500, new { Message = $"更新失敗：{ex.Message}" });
+        }
+    }
+
+    [HttpPost("{productId}/scrape-failures")]
+    public async Task<ActionResult> CreateScrapeFailureLog(
+        string productId,
+        [FromBody] CreateScrapeFailureLogRequest request)
+    {
+        try
+        {
+            var failureType = request.FailureType.Trim().ToUpperInvariant();
+            if (!ScrapeFailureTypes.Contains(failureType))
+            {
+                return BadRequest(new { Message = $"不支援的爬取失敗類型: {request.FailureType}" });
+            }
+
+            var product = await _context.Products
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.ProductId == productId);
+
+            if (product == null)
+            {
+                return NotFound(new { Message = $"找不到產品 ID: {productId}" });
+            }
+
+            var failureLog = new ScrapeFailureLog
+            {
+                ProductId = product.Id,
+                FailureType = failureType,
+                Verdict = request.Verdict.Trim(),
+                HttpStatus = request.HttpStatus,
+                Tier = request.Tier.Trim(),
+                Attempts = request.Attempts,
+                ElapsedMs = request.ElapsedMs,
+                IsPendingInitialScrape = request.IsPendingInitialScrape,
+                LoggedAt = TaiwanTime.Now
+            };
+
+            await _context.ScrapeFailureLogs.AddAsync(failureLog);
+            await _context.SaveChangesAsync();
+
+            _logger.LogWarning(
+                "已記錄爬取失敗 productId={productId}, failureType={failureType}, verdict={verdict}, attempts={attempts}",
+                productId,
+                failureType,
+                failureLog.Verdict,
+                failureLog.Attempts);
+
+            return CreatedAtAction(
+                nameof(CreateScrapeFailureLog),
+                new { productId },
+                new { failureLog.Id, ProductId = productId, failureLog.LoggedAt });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "記錄產品 {productId} 的爬取失敗時發生錯誤", productId);
+            return StatusCode(500, new { Message = "記錄爬取失敗時發生錯誤" });
         }
     }
 

@@ -16,6 +16,8 @@ public class ApplicationDbContext : DbContext
 
     public DbSet<ProductLog> ProductLogs { get; set; }
 
+    public DbSet<ScrapeFailureLog> ScrapeFailureLogs { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -129,6 +131,34 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(e => e.ProductId);
             entity.HasIndex(e => e.LoggedAt);
             entity.HasIndex(e => e.Action);
+        });
+
+        modelBuilder.Entity<ScrapeFailureLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.FailureType)
+                .IsRequired()
+                .HasMaxLength(20);
+
+            entity.Property(e => e.Verdict)
+                .IsRequired()
+                .HasMaxLength(200);
+
+            entity.Property(e => e.Tier)
+                .IsRequired()
+                .HasMaxLength(50);
+
+            entity.Property(e => e.LoggedAt)
+                .HasDefaultValueSql("DATEADD(HOUR, 8, GETUTCDATE())");
+
+            entity.HasOne(e => e.Product)
+                .WithMany()
+                .HasForeignKey(e => e.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => new { e.ProductId, e.LoggedAt });
+            entity.HasIndex(e => new { e.FailureType, e.LoggedAt });
         });
     }
 }
