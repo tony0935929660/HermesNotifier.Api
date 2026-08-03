@@ -38,7 +38,14 @@ public class ProductController : ControllerBase
     private const string LevelC = "C";
     private const string LevelD = "D";
     private const string LevelE = "E";
-    private static readonly Regex ProductIdRegex = new("^[0-9A-Z]{10}$", RegexOptions.Compiled);
+    private static readonly Regex ProductIdRegex = new("^H[0-9A-Z]{10}$", RegexOptions.Compiled);
+
+    /// <summary>ProductId 一律用帶 H 的完整代碼；舊呼叫端送無 H 形式時自動補 H。</summary>
+    private static string NormalizeProductIdInput(string value)
+    {
+        var normalized = value.Trim().ToUpperInvariant();
+        return normalized.StartsWith('H') ? normalized : $"H{normalized}";
+    }
 
     public ProductController(
         ApplicationDbContext context,
@@ -691,7 +698,9 @@ public class ProductController : ControllerBase
                     continue;
                 }
 
-                if (existingDict.TryGetValue(dto.ProductId, out var existing))
+                var incomingProductId = NormalizeProductIdInput(dto.ProductId);
+
+                if (existingDict.TryGetValue(incomingProductId, out var existing))
                 {
                     var changed = false;
 
@@ -742,12 +751,12 @@ public class ProductController : ControllerBase
 
                 var url = !string.IsNullOrWhiteSpace(dto.ProductUrl)
                     ? dto.ProductUrl
-                    : $"https://www.hermes.com/tw/zh/product/{dto.ProductId}/";
+                    : $"https://www.hermes.com/tw/zh/product/{incomingProductId}/";
 
                 toAdd.Add(new Product
                 {
-                    ProductId = dto.ProductId,
-                    Title = string.IsNullOrWhiteSpace(dto.Title) ? dto.ProductId : dto.Title,
+                    ProductId = incomingProductId,
+                    Title = string.IsNullOrWhiteSpace(dto.Title) ? incomingProductId : dto.Title,
                     Price = dto.Price,
                     ImageUrl = dto.ImageUrl,
                     ProductUrl = url,
@@ -758,7 +767,7 @@ public class ProductController : ControllerBase
                     AvailabilityStatus = StatusOutOfStock,
                     CacheExpiresAt = null  // null → 立即納入 onlyExpired，下一輪就檢查
                 });
-                existingDict[dto.ProductId] = toAdd[^1]; // 避免同批重複
+                existingDict[incomingProductId] = toAdd[^1]; // 避免同批重複
             }
 
             if (toAdd.Any() || updatedCount > 0)
@@ -794,7 +803,7 @@ public class ProductController : ControllerBase
     {
         try
         {
-            var sourceProductId = request.SourceProductId.Trim().ToUpperInvariant().TrimStart('H');
+            var sourceProductId = NormalizeProductIdInput(request.SourceProductId);
             var sourceProduct = await _context.Products
                 .FirstOrDefaultAsync(p => p.ProductId == sourceProductId);
 
@@ -807,7 +816,7 @@ public class ProductController : ControllerBase
                 .Select(item => new
                 {
                     Item = item,
-                    ProductId = item.ProductId.Trim().ToUpperInvariant().TrimStart('H')
+                    ProductId = NormalizeProductIdInput(item.ProductId)
                 })
                 .GroupBy(x => x.ProductId)
                 .Select(group => group.First())
@@ -972,7 +981,7 @@ public class ProductController : ControllerBase
             || uri.Scheme != Uri.UriSchemeHttps
             || !(uri.Host.Equals("www.hermes.com", StringComparison.OrdinalIgnoreCase)
                  || uri.Host.Equals("hermes.com", StringComparison.OrdinalIgnoreCase))
-            || !uri.AbsolutePath.Contains($"-H{productId}", StringComparison.OrdinalIgnoreCase))
+            || !uri.AbsolutePath.Contains($"-{productId}", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

@@ -367,7 +367,7 @@ public class AdminController : ControllerBase
         }
 
         var sku = skuMatch.Groups["sku"].Value.ToUpperInvariant();
-        var productId = sku[1..];
+        var productId = sku;  // 完整帶 H 代碼
         var existing = await _context.Products
             .AsNoTracking()
             .FirstOrDefaultAsync(p => p.ProductId == productId);

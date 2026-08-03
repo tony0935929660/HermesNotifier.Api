@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.0] - 2026-08-03
+
+### Changed
+
+- Store and return product identifiers in the full H-prefixed Hermès SKU format.
+- Normalize incoming product identifiers by adding a missing H prefix for backward compatibility.
+- Validate variant product URLs and admin URL imports against H-prefixed identifiers.
+
 ## 2026-08-01
 
 ### Added
