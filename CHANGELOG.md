@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1] - 2026-08-21
+
+### Fixed
+
+- Synchronize complete product metadata, availability, and cache expiry before sending restock notifications.
+- Keep products without a valid price pending so incomplete data cannot change availability or trigger notifications.
+- Trigger restock notifications when either availability field changes to in stock.
+
 ## [0.1.0] - 2026-08-03
 
 ### Changed

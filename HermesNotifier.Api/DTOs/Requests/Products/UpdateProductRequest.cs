@@ -20,4 +20,6 @@ public class UpdateProductRequest
     public bool? IsAvailable { get; set; }
 
     public string? AvailabilityStatus { get; set; }
+
+    public DateTime? CacheExpiresAt { get; set; }
 }

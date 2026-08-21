@@ -82,11 +82,11 @@ public class ProductController : ControllerBase
             if (onlyExpired)
             {
                 // 只選「快取已過期（CacheExpiresAt <= 現在）或從未抓取（null）」的商品，
-                // 並讓仍使用 placeholder 名稱與價格的商品優先抓取。
+                // 並讓尚未取得價格的商品優先抓取（與 IsPendingInitialScrape 判斷一致）。
                 var now = TaiwanTime.Now;
                 query = query
                     .Where(p => p.CacheExpiresAt == null || p.CacheExpiresAt <= now)
-                    .OrderBy(p => p.Title == p.ProductId && p.Price == 0 ? 0 : 1)
+                    .OrderBy(p => p.Price <= 0 ? 0 : 1)
                     .ThenBy(p => p.Level == LevelA ? 0 :
                                   p.Level == LevelB ? 1 :
                                   p.Level == LevelC ? 2 :
@@ -209,6 +209,7 @@ public class ProductController : ControllerBase
             }
 
             var changed = false;
+            var becameAvailable = false;
 
             if (!string.IsNullOrWhiteSpace(request.Title) && product.Title != request.Title)
             {
@@ -252,22 +253,35 @@ public class ProductController : ControllerBase
 
             if (request.IsAvailable.HasValue || !string.IsNullOrWhiteSpace(request.AvailabilityStatus))
             {
-                if (!TryResolveAvailabilityState(
-                        request.AvailabilityStatus,
-                        request.IsAvailable,
-                        out var resolvedStatus,
-                        out var resolvedIsAvailable,
-                        out var errorMessage))
+                // 尚未取得有效價格時只回寫商品內容，避免先標記上架而錯過完整資料通知。
+                if (product.Price > 0)
                 {
-                    return BadRequest(new { Message = errorMessage });
-                }
+                    if (!TryResolveAvailabilityState(
+                            request.AvailabilityStatus,
+                            request.IsAvailable,
+                            out var resolvedStatus,
+                            out var resolvedIsAvailable,
+                            out var errorMessage))
+                    {
+                        return BadRequest(new { Message = errorMessage });
+                    }
 
-                if (product.AvailabilityStatus != resolvedStatus || product.IsAvailable != resolvedIsAvailable)
-                {
-                    product.AvailabilityStatus = resolvedStatus;
-                    product.IsAvailable = resolvedIsAvailable;
-                    changed = true;
+                    becameAvailable = resolvedStatus == StatusInStock
+                        && (product.AvailabilityStatus != StatusInStock || !product.IsAvailable);
+                    if (product.AvailabilityStatus != resolvedStatus || product.IsAvailable != resolvedIsAvailable)
+                    {
+                        product.AvailabilityStatus = resolvedStatus;
+                        product.IsAvailable = resolvedIsAvailable;
+                        changed = true;
+                    }
                 }
+            }
+
+            var incomingCacheExpiry = TaiwanTime.ToTaiwan(request.CacheExpiresAt);
+            if (incomingCacheExpiry.HasValue && product.CacheExpiresAt != incomingCacheExpiry)
+            {
+                product.CacheExpiresAt = incomingCacheExpiry;
+                changed = true;
             }
 
             if (!changed)
@@ -283,12 +297,36 @@ public class ProductController : ControllerBase
             product.UpdatedAt = TaiwanTime.Now;
             await _context.SaveChangesAsync();
 
+            LineBroadcastResult? lineNotification = null;
+            if (becameAvailable)
+            {
+                try
+                {
+                    lineNotification = await BroadcastLineMessageAsync(new List<Product> { product });
+                }
+                catch (Exception notifyEx)
+                {
+                    _logger.LogError(notifyEx, "商品資料與庫存同步後的補貨通知發送失敗: {productId}", productId);
+                    lineNotification = new LineBroadcastResult(0, 0, 0, 0);
+                }
+            }
+
             return Ok(new
             {
                 Message = "產品更新成功",
                 ProductId = product.ProductId,
                 Changed = true,
-                UpdatedAt = product.UpdatedAt
+                UpdatedAt = product.UpdatedAt,
+                CacheExpiresAt = product.CacheExpiresAt,
+                Notification = lineNotification is null
+                    ? null
+                    : new
+                    {
+                        AttemptedUsers = lineNotification.AttemptedUsers,
+                        SuccessUsers = lineNotification.SuccessUsers,
+                        FailedUsers = lineNotification.FailedUsers,
+                        SuccessBatches = lineNotification.SuccessBatches
+                    }
             });
         }
         catch (Exception ex)
@@ -389,7 +427,7 @@ public class ProductController : ControllerBase
             // 補貨通知：僅在「狀態真的改變」且「變為可購買（缺貨/404→有貨）」時發送 LINE，
             // 讓爬蟲透過 /availability 更新庫存時也能推播補貨快訊（不影響更新 API 的成功結果）。
             LineBroadcastResult? lineNotification = null;
-            if (statusChanged && resolvedStatus == StatusInStock)
+            if ((statusChanged || availabilityChanged) && resolvedStatus == StatusInStock)
             {
                 try
                 {
@@ -869,7 +907,7 @@ public class ProductController : ControllerBase
                     continue;
                 }
 
-                if (product.Title == product.ProductId && product.Price == 0)
+                if (IsPendingInitialScrape(product))
                 {
                     product.ProductUrl = productUrl;
                     product.CacheExpiresAt = null;
@@ -988,6 +1026,12 @@ public class ProductController : ControllerBase
 
         productUrl = uri.GetLeftPart(UriPartial.Path);
         return true;
+    }
+
+    /// <summary>商品尚未取得完整資料，不應納入通知。標題形態不可靠（佔位碼／枚舉名／日文），改以價格判定。</summary>
+    private static bool IsPendingInitialScrape(Product product)
+    {
+        return product.Price <= 0;
     }
 
     private static string GetProductLogAction(string status)
